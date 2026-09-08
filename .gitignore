@@ -1,0 +1,9 @@
+﻿venv/
+node_modules/
+__pycache__/
+fir_system.db
+*.pt
+*.safetensors
+*.bin
+.DS_Store
+*.zip
