@@ -30,11 +30,39 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "model")
 LABEL_SET_PATH = os.path.join(MODEL_DIR, "label_set.json")
 
-# Sigmoid threshold for multi-label output. Track A should tune this on the
-# dev set -- 0.5 is usually wrong for imbalanced multi-label problems.
+# Sigmoid threshold for multi-label output. Track A tunes this on the dev set
+# and writes it to threshold.json alongside the model; this value is only the
+# fallback if that file is missing. 0.5 is usually wrong for imbalanced
+# multi-label problems.
 THRESHOLD = 0.35
+THRESHOLD_PATH = os.path.join(MODEL_DIR, "threshold.json")
 MAX_LENGTH = 256
 TOP_K = 4  # cap on sections returned, so the UI stays readable
+
+
+def normalise_code(code):
+    """
+    Reconcile the model's label strings with the ipc_sections table.
+
+    ILSI labels may arrive as "Section 302", "IPC_302", "302 " or "302".
+    The database stores the bare code ("302", "376A"). Without this the
+    lookup silently misses, every section falls back to the default severity
+    of 5, and priority scoring becomes meaningless while still looking fine
+    on screen -- the worst kind of failure.
+    """
+    c = str(code).strip()
+
+    # ILSI labels arrive as "Section 302 in The Indian Penal Code"
+    for suffix in (" in The Indian Penal Code", " in the Indian Penal Code",
+                   " IPC", " of IPC"):
+        if c.endswith(suffix):
+            c = c[: -len(suffix)]
+
+    for prefix in ("Section ", "SECTION ", "section ", "IPC_", "IPC ", "S."):
+        if c.startswith(prefix):
+            c = c[len(prefix):]
+
+    return c.strip().upper().replace(" ", "")
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +148,16 @@ def _load_model():
     import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+    global THRESHOLD
     with open(LABEL_SET_PATH, "r", encoding="utf-8") as f:
-        _labels = json.load(f)["labels"]
+        _labels = [normalise_code(l) for l in json.load(f)["labels"]]
+
+    if os.path.exists(THRESHOLD_PATH):
+        with open(THRESHOLD_PATH, "r", encoding="utf-8") as f:
+            THRESHOLD = float(json.load(f)["threshold"])
+        print(f"[classifier] threshold {THRESHOLD} loaded from threshold.json")
+    else:
+        print(f"[classifier] threshold.json not found; using default {THRESHOLD}")
 
     _tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
     _model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR)
@@ -145,7 +181,7 @@ def _predict_model(text):
         ({"code": _labels[i], "confidence": round(p, 4)}
          for i, p in enumerate(probs)),
         key=lambda d: -d["confidence"],
-    )
+    )  # _labels already normalised at load time
     above = [s for s in scored if s["confidence"] >= THRESHOLD]
 
     # Never return nothing: fall back to the single best section so the
@@ -167,10 +203,67 @@ def predict(text):
     return _predict_stub(text)
 
 
+_explainer = None
+_explainer_failed = False
+
+# Integrated gradients is expensive on CPU. Set FIR_EXPLAIN=0 to turn token
+# attribution off entirely and return an empty explanation array -- the
+# classification, priority and routing are unaffected.
+EXPLAIN_ENABLED = os.environ.get("FIR_EXPLAIN", "1") == "1"
+EXPLAIN_MAX_CHARS = 600
+
+
+def _explain_model(text, sections, top_k=8):
+    """
+    Integrated-gradients attribution for the single top predicted section.
+
+    NOTE: transformers-interpret's MultiLabelClassificationExplainer runs a
+    full IG pass for every label in the model. With a 100-section label set
+    that is 100 passes per request, which takes minutes on CPU and appears
+    to hang. SequenceClassificationExplainer with an explicit class index
+    runs exactly one pass, which is all the UI needs -- it highlights the
+    tokens behind the top section.
+
+    Any failure degrades to an empty explanation rather than breaking the
+    request.
+    """
+    global _explainer, _explainer_failed
+    if _explainer_failed or not EXPLAIN_ENABLED or not sections:
+        return []
+
+    if _explainer is None:
+        from transformers_interpret import SequenceClassificationExplainer
+        _load_model()
+        _explainer = SequenceClassificationExplainer(_model, _tokenizer)
+
+    # index of the top predicted section within the frozen label list
+    top_code = sections[0]["code"]
+    try:
+        class_index = _labels.index(top_code)
+    except (ValueError, TypeError):
+        return []
+
+    attrs = _explainer(text[:EXPLAIN_MAX_CHARS], index=class_index)
+
+    ranked = sorted(attrs, key=lambda p: -abs(p[1]))[:top_k]
+    return [
+        {"token": tok, "weight": round(abs(float(w)), 3)}
+        for tok, w in ranked
+        if tok not in ("[CLS]", "[SEP]", "[PAD]") and len(tok) > 1
+    ]
+
+
 def explain(text, sections):
     """Token-level attributions for the `explanation` field."""
     if USE_MODEL:
-        return []  # Track A supplies integrated-gradients output here
+        try:
+            return _explain_model(text, sections)
+        except Exception as e:
+            global _explainer_failed
+            _explainer_failed = True
+            print(f"[classifier] explainability unavailable ({e}); "
+                  f"continuing without token attributions")
+            return []
     return _explain_stub(text, sections)
 
 
