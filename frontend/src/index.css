@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  /* Brand palette */
+  --color-vellum: #f0efe9;
+  --color-paper: #ffffff;
+  --color-carbon: #322d2a;
+  --color-onyx: #0f0e12;
+  --color-mercury: #6b6560;
+  --color-mercury-light: #d8d6d0;
+  --color-line: #e2e0d8;
+
+  /* Semantic priority colors — muted, refined */
+  --color-priority-high: #a6483c;
+  --color-priority-high-bg: #f6e9e6;
+  --color-priority-medium: #7a5a1f;
+  --color-priority-medium-bg: #f5eede;
+  --color-priority-low: #427056;
+  --color-priority-low-bg: #e8f0e9;
+
+  /* Radii */
+  --radius-nav: 16px;
+  --radius-card: 24px;
+  --radius-input: 24px;
+  --radius-image: 72px;
+  --radius-button: 100px;
+  --radius-control: 10px;
+
+  --animate-scan: scan 2.4s linear infinite;
+  --animate-fade-up: fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+
+  @keyframes scan {
+    0% { transform: translateY(-100%); }
+    100% { transform: translateY(600%); }
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+  html {
+    background: var(--color-vellum);
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    color: var(--color-carbon);
+    font-family: var(--font-sans);
+  }
+  ::selection {
+    background: var(--color-carbon);
+    color: var(--color-vellum);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-carbon);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+}
+
+@layer utilities {
+  .section-label {
+    @apply flex items-center gap-2 text-xs uppercase tracking-[0.12em] font-medium;
+  }
+  .section-label::before {
+    content: "";
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+  .container-page {
+    @apply max-w-[1200px] mx-auto px-6 md:px-10;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
