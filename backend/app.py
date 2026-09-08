@@ -58,15 +58,20 @@ def process_complaint(text):
     rules = db.get_routing_rules(codes)
     route = routing_engine.route_complaint(sections, rules, titles)
 
-    complaint_id, received_at = db.save_complaint(text, sections, priority, route)
+    explanation = classifier.explain(text, raw_sections)
+
+    complaint_id, received_at = db.save_complaint(
+        text, sections, priority, route, explanation
+    )
 
     return {
         "complaint_id": complaint_id,
+        "complaint_text": text,
         "received_at": received_at,
         "sections": sections,
         "priority": priority,
         "routing": route,
-        "explanation": classifier.explain(text, raw_sections),
+        "explanation": explanation,
         "model_backend": classifier.backend_name(),
     }
 

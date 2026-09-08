@@ -37,6 +37,7 @@ CREATE TABLE complaints (
     priority_score REAL,
     routed_unit    TEXT,
     routing_reason TEXT,
+    explanation    TEXT,              -- JSON array of {token, weight}
     status         TEXT NOT NULL DEFAULT 'New'
 );
 

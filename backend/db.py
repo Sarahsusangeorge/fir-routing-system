@@ -7,6 +7,7 @@ setup failure on demo day. The schema is portable to MySQL for
 deployment -- only the connection helper below would change.
 """
 
+import json
 import os
 import sqlite3
 
@@ -89,20 +90,21 @@ def get_routing_rules(codes):
 # Complaints
 # ---------------------------------------------------------------------------
 
-def save_complaint(text, sections, priority, routing):
+def save_complaint(text, sections, priority, routing, explanation=None):
     """
-    Persist a complaint and its predicted sections in one transaction.
-    Returns (complaint_id, received_at).
+    Persist a complaint, its predicted sections and its token attributions
+    in one transaction. Returns (complaint_id, received_at).
     """
     conn = get_connection()
     try:
         cur = conn.execute(
             """INSERT INTO complaints
                (complaint_text, priority_level, priority_score,
-                routed_unit, routing_reason)
-               VALUES (?, ?, ?, ?, ?)""",
+                routed_unit, routing_reason, explanation)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (text, priority["level"], priority["score"],
-             routing["unit"], routing["reason"]),
+             routing["unit"], routing["reason"],
+             json.dumps(explanation or [])),
         )
         complaint_id = cur.lastrowid
 
@@ -146,6 +148,11 @@ def list_complaints(limit=50):
             (r["id"],),
         ).fetchall()
 
+        try:
+            explanation = json.loads(r["explanation"] or "[]")
+        except (TypeError, ValueError):
+            explanation = []
+
         out.append({
             "complaint_id": r["id"],
             "complaint_text": r["complaint_text"],
@@ -154,6 +161,7 @@ def list_complaints(limit=50):
             "priority": {"level": r["priority_level"], "score": r["priority_score"]},
             "routing": {"unit": r["routed_unit"], "reason": r["routing_reason"]},
             "sections": [dict(s) for s in secs],
+            "explanation": explanation,
         })
     conn.close()
     return out
