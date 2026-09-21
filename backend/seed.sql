@@ -233,3 +233,10 @@ INSERT INTO routing_rules (section_code, unit, precedence) VALUES
 ('450', 'Local Police Station', 6),
 ('452', 'Local Police Station', 6),
 ('457', 'Local Police Station', 6);
+
+-- Police stations (demo set for one district).
+INSERT OR IGNORE INTO stations (code, name, district) VALUES
+    ('PS-CENTRAL', 'Central Police Station', 'Vellore'),
+    ('PS-NORTH',   'North Police Station',   'Vellore'),
+    ('PS-SOUTH',   'South Police Station',   'Vellore'),
+    ('PS-CYBER',   'Cyber Crime Police Station', 'Vellore');

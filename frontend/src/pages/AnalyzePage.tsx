@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import AnalysisHeader from "../components/AnalysisHeader";
 import AnalysisProgress from "../components/AnalysisProgress";
 import AnalyzeButton from "../components/AnalyzeButton";
@@ -161,7 +162,17 @@ export default function AnalyzePage() {
           {state === "result" && result && (
             <motion.div key="result" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-16">
               <div>
-                <AnalysisHeader complaintId={result.complaint_id} receivedAt={result.received_at} />
+                {result.assignment?.officer_name && (
+              <p className="text-sm text-mercury mb-6">
+                Allocated to <span className="text-carbon">{result.assignment.officer_name}</span> in{" "}
+                {result.routing.unit}.{" "}
+                <Link to={`/cases/${result.complaint_id}`} className="underline underline-offset-4 hover:text-carbon">
+                  Open the case
+                </Link>
+              </p>
+            )}
+
+            <AnalysisHeader complaintId={result.complaint_id} receivedAt={result.received_at} />
               </div>
 
               <div>
