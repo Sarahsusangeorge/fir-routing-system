@@ -7,3 +7,6 @@ fir_system.db
 *.bin
 .DS_Store
 *.zip
+.env
+backend/.jwt_secret
+.vite/

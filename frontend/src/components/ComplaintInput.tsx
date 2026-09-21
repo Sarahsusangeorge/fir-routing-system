@@ -8,23 +8,36 @@ interface ComplaintInputProps {
   error?: string | null;
   maxLength?: number;
   onScanClick?: () => void;
+  label?: string;
+  hint?: string;
+  placeholder?: string;
 }
 
-export default function ComplaintInput({ value, onChange, disabled, error, maxLength = 2000, onScanClick }: ComplaintInputProps) {
+export default function ComplaintInput({
+  value,
+  onChange,
+  disabled,
+  error,
+  maxLength = 2000,
+  onScanClick,
+  label = "Submit complaint",
+  hint = "Enter or paste a complaint narrative to begin analysis.",
+  placeholder = "Enter complaint text...",
+}: ComplaintInputProps) {
   const id = useId();
 
   return (
     <div>
       <div className="flex items-baseline justify-between mb-3">
         <label htmlFor={id} className="text-[15px] font-medium text-carbon">
-          Submit complaint
+          {label}
         </label>
         <span className="text-xs text-mercury tabular-nums" aria-live="polite">
           {value.length} / {maxLength}
         </span>
       </div>
       <div className="flex items-start justify-between gap-4 mb-4">
-        <p className="text-sm text-mercury">Enter or paste a complaint narrative to begin analysis.</p>
+        <p className="text-sm text-mercury">{hint}</p>
         {onScanClick && (
           <button
             type="button"
@@ -44,7 +57,7 @@ export default function ComplaintInput({ value, onChange, disabled, error, maxLe
         disabled={disabled}
         maxLength={maxLength}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Enter complaint text..."
+        placeholder={placeholder}
         rows={7}
         aria-invalid={!!error}
         aria-describedby={error ? `${id}-error` : undefined}
