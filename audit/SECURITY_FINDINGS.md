@@ -210,7 +210,7 @@
   - `test_unmapped_section_is_flagged_for_review`
   - `test_unrecognised_narrative_is_marked_as_a_fallback`
   - `components.test.tsx` (PriorityCard)
-- **Residual risk:** The score still drops as confidence drops. Escalating uncertain grave cases automatically is a research-design change left to the team (see [COUNCIL_VERDICT.md](COUNCIL_VERDICT.md)).
+- **Residual risk:** The score still drops as confidence drops. Escalating uncertain grave cases automatically is a research-design change left to the team.
 
 ### NIV-13: Non-object JSON or wrongly typed fields crash endpoints
 - **Severity:** Low. **Status:** Fixed.

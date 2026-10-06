@@ -81,7 +81,7 @@ All commands and their raw output are in [FINAL_VERIFICATION.md](FINAL_VERIFICAT
 
 1. **The research claim is not demonstrated.** The predictor is a keyword stub with no measured accuracy. It mishandles negation ("nothing was stolen" is still predicted as theft) and gives a placeholder section to offences it has no keyword for, such as arson. Those cases are now flagged, not hidden.
 2. **The legal basis is outdated and unverified.** The system is built on the IPC, which the BNS replaced on 1 July 2024. The cognizable and bailable values are unverified against the First Schedule. Some sections the seed file calls "definitional" (299, 300, 375) carry high weights, contradicting its own rubric.
-3. **The priority formula demotes uncertainty.** A grave offence predicted with low confidence still scores Medium; the new flag only tells the officer to look. Whether to escalate such cases automatically is a research decision for the team (see [COUNCIL_VERDICT.md](COUNCIL_VERDICT.md)).
+3. **The priority formula demotes uncertainty.** A grave offence predicted with low confidence still scores Medium; the new flag only tells the officer to look. Whether to escalate such cases automatically is a research decision for the team.
 4. **Data protection is not implemented.**
    - No encryption at rest.
    - No retention or deletion policy.
