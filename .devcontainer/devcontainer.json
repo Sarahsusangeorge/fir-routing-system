@@ -1,0 +1,16 @@
+{
+  "name": "NIVARA",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" }
+  },
+  "postCreateCommand": "bash scripts/setup.sh",
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": { "label": "NIVARA web app", "onAutoForward": "openBrowser" },
+    "5001": { "label": "NIVARA API (reached through the web app)", "onAutoForward": "silent" }
+  },
+  "customizations": {
+    "codespaces": { "openFiles": ["CODESPACES.md"] }
+  }
+}

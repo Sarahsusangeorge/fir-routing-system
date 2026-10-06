@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS users (
     contact_email TEXT,
     contact_phone TEXT,
     active        INTEGER NOT NULL DEFAULT 1,
+    token_version INTEGER NOT NULL DEFAULT 0,  -- bumped to sign out every session
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     last_login_at TEXT,
     CHECK (email IS NOT NULL OR phone IS NOT NULL),
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS login_codes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     identifier TEXT NOT NULL COLLATE NOCASE,
     channel    TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+    purpose    TEXT NOT NULL DEFAULT 'sign-in',   -- a code only works for its purpose
     code_hash  TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     attempts   INTEGER NOT NULL DEFAULT 0,
@@ -81,3 +83,10 @@ CREATE TABLE IF NOT EXISTS auth_attempts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_attempts_lookup ON auth_attempts(kind, key, created_at);
+
+-- Session tokens signed out before they expired. Rows are pruned once the
+-- token would have expired anyway.
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    jti        TEXT PRIMARY KEY,
+    expires_at TEXT NOT NULL
+);

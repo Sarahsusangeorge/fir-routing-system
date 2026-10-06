@@ -1,0 +1,16 @@
+Part A: HTTP read latency against http://localhost:5001 (300 requests per endpoint, 8 concurrent clients)
+  GET /api/health                    n=300  errors=0   p50=   23.8 ms  p95=   28.3 ms  p99=   30.3 ms  mean=   23.3 ms
+  GET /api/auth/me                   n=300  errors=0   p50=    7.8 ms  p95=    9.8 ms  p99=   11.0 ms  mean=    7.9 ms
+  GET /api/complaints?limit=200      n=300  errors=0   p50=   19.2 ms  p95=   24.4 ms  p99=   29.9 ms  mean=   19.2 ms
+  GET /api/complaints/1              n=300  errors=0   p50=   17.1 ms  p95=   19.8 ms  p99=   23.9 ms  mean=   17.2 ms
+  GET /api/officers                  n=300  errors=0   p50=   11.0 ms  p95=   13.4 ms  p99=   14.4 ms  mean=   11.0 ms
+Part B: in-process filing pipeline on an isolated database (no HTTP)
+  file (73 chars)                    n=60   errors=0   p50=    1.2 ms  p95=    1.2 ms  p99=    1.5 ms  mean=    1.2 ms
+  file (90 chars)                    n=60   errors=0   p50=    1.2 ms  p95=    1.6 ms  p99=    1.7 ms  mean=    1.3 ms
+  file (85 chars)                    n=60   errors=0   p50=    1.2 ms  p95=    1.2 ms  p99=    1.4 ms  mean=    1.2 ms
+  file (81 chars)                    n=60   errors=0   p50=    1.2 ms  p95=    1.4 ms  p99=    1.4 ms  mean=    1.2 ms
+  file (3448 chars)                  n=60   errors=0   p50=    1.8 ms  p95=    1.9 ms  p99=    2.1 ms  mean=    1.8 ms
+Scale check: list_complaints(limit=200) with 3015 complaints in the database
+  list_complaints(200) all cases    p50=   7.1 ms  max=   7.4 ms
+  list_complaints(200) open only    p50=   7.0 ms  max=   7.1 ms
+  list_complaints(200) one officer  p50=   4.3 ms  max=   4.4 ms

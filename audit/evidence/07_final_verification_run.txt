@@ -1,0 +1,37 @@
+# Final verification run 2026-10-05 11:35:30 UTC on Apple M4, Python 3.14.5, Node v26.0.0
+
+## 1. Backend pytest suite (includes the two original end-to-end scripts)
+
+=========================== short test summary info ============================
+XFAIL tests/suite/test_decision_logic.py::test_stub_understands_negation - Known limitation of the keyword stub: it does not understand negation.
+======================== 216 passed, 1 xfailed in 9.21s ========================
+
+## 2. Backend import / start-up check
+import ok; classifier: keyword-stub
+health 200 {'model_backend': 'keyword-stub', 'sections_loaded': 100, 'status': 'ok'}
+
+## 3. Production start-up guard with demo data (expected: refuses)
+refused: NIVARA_JWT_SECRET must be set when NIVARA_ENV=production.
+
+## 4. Fresh-database migration check (schema.sql + schema_auth.sql + seed + upgrade path)
+Done. 15 complaints in the database.
+re-init on existing DB, fresh = False
+users cols ok: True
+login_codes.purpose ok: True
+
+## 5. Upgrade of a pre-audit database (original baseline schema) in place
+old DB upgraded; complaints kept: 15
+login on upgraded DB: 200
+
+## 6. Frontend unit tests
+ Test Files  2 passed (2)
+      Tests  14 passed (14)
+
+## 7. Frontend type check + production build
+tsc: 0 errors
+✓ built in 246ms
+
+## 8. Frontend lint (oxlint)
+src/pages/MyComplaintsPage.tsx:332:5: warning react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+src/pages/CasesPage.tsx:45:5: warning react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+src/pages/CasePage.tsx:323:5: warning react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.

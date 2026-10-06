@@ -29,10 +29,22 @@ No Flask and no database imports here on purpose -- this module is
 testable standalone and presentable on a slide.
 """
 
+from decimal import ROUND_HALF_UP, Decimal
+
 HIGH_THRESHOLD = 6.5
 MEDIUM_THRESHOLD = 3.5
 
 DEFAULT_SEVERITY = 5.0  # used if a predicted section is missing from the table
+
+# Severity 9-10 is the rubric's "life imprisonment or death" band (seed.sql).
+GRAVE_SEVERITY = 9.0
+
+
+def _exact(value):
+    # Multiply in decimal, not binary floating point: 5.0 x 0.69 is exactly
+    # 3.45, but as floats it is 3.4499999999999997 and would round down to a
+    # different priority level than 10.0 x 0.645, which rounds up.
+    return Decimal(str(value))
 
 
 def score_complaint(sections, severity_lookup):
@@ -51,20 +63,20 @@ def score_complaint(sections, severity_lookup):
     if not sections:
         return {"level": "Low", "score": 0.0, "driver": None}
 
-    best_score = 0.0
+    best = Decimal(0)
     driver = None
 
     for s in sections:
         weight = severity_lookup.get(s["code"], DEFAULT_SEVERITY)
-        contribution = weight * float(s["confidence"])
-        if contribution > best_score:
-            best_score = contribution
+        contribution = _exact(weight) * _exact(float(s["confidence"]))
+        if contribution > best:
+            best = contribution
             driver = s["code"]
 
     # Round BEFORE thresholding, so the score shown on screen always agrees
     # with the level shown next to it. Comparing the unrounded value would
     # let 6.96 display as "7.0  Medium", which a panelist will notice.
-    best_score = round(best_score, 1)
+    best_score = float(best.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
 
     if best_score >= HIGH_THRESHOLD:
         level = "High"
@@ -74,6 +86,28 @@ def score_complaint(sections, severity_lookup):
         level = "Low"
 
     return {"level": level, "score": best_score, "driver": driver}
+
+
+def review_flags(sections, severity_lookup, priority, fallback=False):
+    """
+    Reasons an officer should double-check this triage, as plain sentences.
+    The score and level are not changed; these flags only stop an uncertain
+    or incomplete prediction from passing silently as a routine case.
+    """
+    flags = []
+    if fallback:
+        flags.append("The classifier did not recognise the offence described; the section shown "
+                     "is a placeholder. Read the complaint and set the sections and unit yourself.")
+    for s in sections:
+        code, conf = s["code"], float(s["confidence"])
+        if code not in severity_lookup:
+            flags.append(f"Section {code} has no severity weight in the reference table, so the "
+                         f"default of {DEFAULT_SEVERITY:g} was used for priority.")
+        elif severity_lookup[code] >= GRAVE_SEVERITY and priority["level"] != "High":
+            flags.append(f"Section {code} carries a severity of {severity_lookup[code]:g} but was "
+                         f"predicted with only {conf:.0%} confidence, so the complaint is not marked "
+                         f"High. Check whether this offence is alleged.")
+    return flags
 
 
 def explain_score(priority, severity_lookup, sections):

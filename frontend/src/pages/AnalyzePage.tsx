@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import AnalysisHeader from "../components/AnalysisHeader";
 import AnalysisProgress from "../components/AnalysisProgress";
@@ -23,6 +23,8 @@ export default function AnalyzePage() {
   const [text, setText] = useState("");
   const [state, setState] = useState<ViewState>("idle");
   const [result, setResult] = useState<Complaint | null>(null);
+  const [pending, setPending] = useState<Complaint | null>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [apiErrorMessage, setApiErrorMessage] = useState<string>("");
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -43,20 +45,13 @@ export default function AnalyzePage() {
     if (scanNotice) setScanNotice(null);
   };
 
-  const handleAnalyze = async () => {
-    if (!text.trim()) {
-      setValidationError("Enter a complaint narrative before analysis.");
-      return;
-    }
-    setValidationError(null);
+  const runAnalysis = async () => {
+    setPending(null);
     setState("analyzing");
-  };
-
-  const handleProgressComplete = async () => {
     try {
-      const data = await classifyComplaint(text);
-      setResult(data);
-      setState("result");
+      // The request starts straight away; the progress animation runs alongside
+      // it and only reports completion once this has resolved.
+      setPending(await classifyComplaint(text));
     } catch (err) {
       setApiErrorMessage(
         err instanceof ClassificationError ? err.message : "The classification service could not be reached."
@@ -65,8 +60,26 @@ export default function AnalyzePage() {
     }
   };
 
+  const handleAnalyze = () => {
+    if (text.trim().length < 15) {
+      setValidationError(
+        text.trim() ? "Describe the incident in a little more detail (at least 15 characters)." : "Enter a complaint narrative before analysis."
+      );
+      return;
+    }
+    setValidationError(null);
+    void runAnalysis();
+  };
+
+  const handleProgressComplete = () => {
+    setResult(pending);
+    setState("result");
+    // Move keyboard and screen-reader focus to the result that just appeared.
+    requestAnimationFrame(() => resultRef.current?.focus());
+  };
+
   const handleRetry = () => {
-    setState("analyzing");
+    void runAnalysis();
   };
 
   const handleNewComplaint = () => {
@@ -106,7 +119,7 @@ export default function AnalyzePage() {
         className="bg-paper border border-line rounded-[24px] p-6 md:p-10 mt-14"
       >
         {state === "analyzing" ? (
-          <AnalysisProgress onComplete={handleProgressComplete} />
+          <AnalysisProgress done={pending !== null} onComplete={handleProgressComplete} />
         ) : (
           <>
             <ComplaintInput
@@ -161,18 +174,33 @@ export default function AnalyzePage() {
 
           {state === "result" && result && (
             <motion.div key="result" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-16">
-              <div>
-                {result.assignment?.officer_name && (
-              <p className="text-sm text-mercury mb-6">
-                Allocated to <span className="text-carbon">{result.assignment.officer_name}</span> in{" "}
-                {result.routing.unit}.{" "}
-                <Link to={`/cases/${result.complaint_id}`} className="underline underline-offset-4 hover:text-carbon">
-                  Open the case
-                </Link>
-              </p>
-            )}
+              <div ref={resultRef} tabIndex={-1} aria-label={`Analysis of complaint ${result.complaint_id}`} className="focus:outline-none">
+                {result.duplicate && (
+                  <p className="text-sm text-carbon bg-paper border border-line rounded-[16px] px-5 py-4 mb-6 max-w-2xl">
+                    This complaint was already filed a few minutes ago, so no new case was created. Below is the
+                    existing case #{result.complaint_id}.
+                  </p>
+                )}
+                {result.assignment?.officer_name ? (
+                  <p className="text-sm text-mercury mb-6">
+                    Allocated to <span className="text-carbon">{result.assignment.officer_name}</span> in{" "}
+                    {result.routing.unit}.{" "}
+                    <Link to={`/cases/${result.complaint_id}`} className="underline underline-offset-4 hover:text-carbon">
+                      Open the case
+                    </Link>
+                  </p>
+                ) : (
+                  <p className="text-sm text-mercury mb-6">
+                    Saved, but no officer in {result.routing.unit} is available yet; the case is waiting in the
+                    unassigned queue.
+                  </p>
+                )}
 
-            <AnalysisHeader complaintId={result.complaint_id} receivedAt={result.received_at} />
+                <AnalysisHeader
+                  complaintId={result.complaint_id}
+                  receivedAt={result.received_at}
+                  modelBackend={result.model_backend}
+                />
               </div>
 
               <div>

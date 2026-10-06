@@ -111,7 +111,7 @@ def _predict_stub(text):
             })
 
     if not hits:
-        return [{"code": "323", "confidence": 0.41, "_match": None}]
+        return [{"code": "323", "confidence": 0.41, "_match": None, "fallback": True}]
 
     hits.sort(key=lambda h: -h["confidence"])
     return hits[:TOP_K]
@@ -159,8 +159,10 @@ def _load_model():
     else:
         print(f"[classifier] threshold.json not found; using default {THRESHOLD}")
 
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-    _model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR)
+    # local_files_only: never fall back to downloading a model from the
+    # Hugging Face Hub if the local folder is incomplete.
+    _tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR, local_files_only=True)
+    _model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR, local_files_only=True)
     _model.eval()
     torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
 
@@ -183,24 +185,46 @@ def _predict_model(text):
         key=lambda d: -d["confidence"],
     )  # _labels already normalised at load time
     above = [s for s in scored if s["confidence"] >= THRESHOLD]
+    if above:
+        return above[:TOP_K]
 
     # Never return nothing: fall back to the single best section so the
-    # pipeline always produces a routing decision.
-    return (above or scored[:1])[:TOP_K]
+    # pipeline always produces a routing decision, but mark it, because no
+    # section actually cleared the threshold.
+    return [{**scored[0], "fallback": True}]
 
 
 # ---------------------------------------------------------------------------
 # Public interface
 # ---------------------------------------------------------------------------
 
-def predict(text):
-    """Return predicted sections. Falls back to the stub if the model fails."""
+STUB_NAME = "keyword-stub"
+FALLBACK_NAME = "keyword-stub (DistilBERT unavailable)"
+_model_failed = False
+
+
+def predict_with_backend(text):
+    """
+    Predicted sections and the name of the backend that actually produced
+    them. If the model is enabled but fails, the stub answers and the name
+    says so, rather than claiming DistilBERT made the prediction.
+    """
+    global _model_failed
     if USE_MODEL:
         try:
-            return _predict_model(text)
+            sections = _predict_model(text)
+            _model_failed = False
+            return sections, "distilbert"
         except Exception as e:
-            print(f"[classifier] model failed ({e}); falling back to stub")
-    return _predict_stub(text)
+            _model_failed = True
+            print(f"[classifier] model failed ({type(e).__name__}); falling back to stub")
+            return _predict_stub(text), FALLBACK_NAME
+    return _predict_stub(text), STUB_NAME
+
+
+def predict(text):
+    """Return predicted sections. Falls back to the stub if the model fails."""
+    return predict_with_backend(text)[0]
 
 
 _explainer = None
@@ -253,9 +277,14 @@ def _explain_model(text, sections, top_k=8):
     ]
 
 
-def explain(text, sections):
-    """Token-level attributions for the `explanation` field."""
-    if USE_MODEL:
+def explain(text, sections, backend=None):
+    """
+    Token-level attributions for the `explanation` field, from the same
+    backend that produced `sections`.
+    """
+    if backend is None:
+        backend = backend_name()
+    if backend == "distilbert":
         try:
             return _explain_model(text, sections)
         except Exception as e:
@@ -268,4 +297,6 @@ def explain(text, sections):
 
 
 def backend_name():
-    return "distilbert" if USE_MODEL else "keyword-stub"
+    if not USE_MODEL:
+        return STUB_NAME
+    return FALLBACK_NAME if _model_failed else "distilbert"

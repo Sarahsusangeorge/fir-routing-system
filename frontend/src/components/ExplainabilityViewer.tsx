@@ -6,6 +6,8 @@ interface Segment {
   text: string;
   weight: number | null;
   key: string;
+  /** Order among highlighted segments, for the staggered reveal. */
+  order?: number;
 }
 
 function buildSegments(text: string, tokens: ExplanationToken[]): Segment[] {
@@ -31,7 +33,7 @@ function buildSegments(text: string, tokens: ExplanationToken[]): Segment[] {
     if (r.start > cursor) {
       segments.push({ text: text.slice(cursor, r.start), weight: null, key: `plain-${i}` });
     }
-    segments.push({ text: text.slice(r.start, r.end), weight: r.weight, key: `hl-${i}` });
+    segments.push({ text: text.slice(r.start, r.end), weight: r.weight, key: `hl-${i}`, order: i });
     cursor = r.end;
   });
   if (cursor < text.length) {
@@ -50,17 +52,18 @@ export default function ExplainabilityViewer({ complaintText, explanation }: Exp
   const segments = useMemo(() => buildSegments(complaintText, explanation), [complaintText, explanation]);
   const maxWeight = useMemo(() => Math.max(0.01, ...explanation.map((t) => t.weight)), [explanation]);
 
-  let highlightIndex = -1;
-
   return (
     <div className="bg-paper border border-line rounded-[24px] p-8">
+      <p className="text-xs text-mercury mb-4 max-w-xl">
+        Highlights explain the classifier's output, not whether the offence happened. Press Tab to move between
+        highlighted words and hear their influence weight.
+      </p>
       <p className="text-[17px] leading-[1.7] text-carbon">
         {segments.map((seg) => {
           if (seg.weight === null) {
             return <span key={seg.key}>{seg.text}</span>;
           }
-          highlightIndex += 1;
-          const idx = highlightIndex;
+          const idx = seg.order ?? 0;
           const intensity = 0.16 + (seg.weight / maxWeight) * 0.5;
           const isHovered = hovered === seg.key;
 
@@ -72,7 +75,7 @@ export default function ExplainabilityViewer({ complaintText, explanation }: Exp
                 viewport={{ once: true, margin: "-60px" }}
                 transition={{ duration: 0.5, delay: idx * 0.12, ease: [0.16, 1, 0.3, 1] }}
                 tabIndex={0}
-                role="button"
+                aria-label={`${seg.text}, influence weight ${seg.weight.toFixed(2)}`}
                 aria-describedby={isHovered ? `tooltip-${seg.key}` : undefined}
                 onMouseEnter={() => setHovered(seg.key)}
                 onMouseLeave={() => setHovered(null)}

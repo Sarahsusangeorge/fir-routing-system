@@ -1,0 +1,61 @@
+## bandit (app code, excluding venv and tests)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html
+   Location: ./db.py:671:25
+670	    conn = get_connection()
+671	    row = conn.execute(f"SELECT {_USER_COLUMNS} FROM users WHERE id = ?", (user_id,)).fetchone()
+672	    conn.close()
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html
+   Location: ./db.py:733:23
+732	        revoke = ", token_version = token_version + 1" if {"password_hash", "active"} & set(fields) else ""
+733	        conn.execute(f"UPDATE users SET {assignments}{revoke} WHERE id = ?",
+734	                     list(fields.values()) + [user_id])
+
+--------------------------------------------------
+>> Issue: [B608:hardcoded_sql_expressions] Possible SQL injection vector through string-based query construction.
+   Severity: Medium   Confidence: Low
+   CWE: CWE-89 (https://cwe.mitre.org/data/definitions/89.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html
+   Location: ./db.py:751:14
+750	    cols = ", ".join(f"u.{c.strip()}" for c in _USER_COLUMNS.split(","))
+751	    sql = f"""
+752	        SELECT {cols},
+753	               (SELECT COUNT(*) FROM complaints c
+754	                 WHERE c.assigned_to = u.id AND c.status NOT IN ({_placeholders(final)})) AS open_cases
+755	        FROM users u
+756	    """
+757	    params = list(final)
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'NivaraOfficer2026'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: ./seed_demo.py:28:19
+27	# no officer of its own.
+28	OFFICER_PASSWORD = "NivaraOfficer2026"
+29	
+
+--------------------------------------------------
+
+Code scanned:
+	Total lines of code: 2940
+	Total lines skipped (#nosec): 0
+	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 0
+
+Run metrics:
+	Total issues (by severity):
+		Undefined: 0
+		Low: 2
+		Medium: 17
+		High: 0
+	Total issues (by confidence):
+		Undefined: 0
+		Low: 2
+		Medium: 14
+		High: 3
+Files skipped (0):

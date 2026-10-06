@@ -1,0 +1,14 @@
+ ✓ src/services/api.test.ts > live mode never substitutes demo data > reports an unreachable backend instead of inventing a filed complaint 38ms
+ ✓ src/services/api.test.ts > live mode never substitutes demo data > does not show synthetic cases when the case list cannot be loaded 1ms
+ ✓ src/services/api.test.ts > live mode never substitutes demo data > passes server validation messages through 2ms
+ ✓ src/services/api.test.ts > demo mode > is used only when no backend is configured 0ms
+ ✓ src/services/api.test.ts > timestamps > treats backend UTC timestamps as UTC 0ms
+ ✓ src/components/components.test.tsx > PriorityCard > shows review reasons as text, not colour alone 55ms
+ ✓ src/components/components.test.tsx > PriorityCard > shows no review box for a confident prediction 2ms
+ ✓ src/components/components.test.tsx > StatusBadge > names the High level in text 1ms
+ ✓ src/components/components.test.tsx > StatusBadge > names the Medium level in text 0ms
+ ✓ src/components/components.test.tsx > StatusBadge > names the Low level in text 0ms
+ ✓ src/components/components.test.tsx > ModelBadge > flags a degraded classifier 0ms
+ ✓ src/components/components.test.tsx > ModelBadge > renders nothing without a backend 0ms
+ ✓ src/components/components.test.tsx > ExplainabilityViewer > highlights the attributed tokens of this complaint and labels them for screen readers 16ms
+ ✓ src/components/components.test.tsx > ExplainabilityViewer > renders plain text when there is no explanation 1ms

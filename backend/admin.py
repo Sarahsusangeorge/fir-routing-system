@@ -13,13 +13,13 @@ colleagues.
 import re
 import sqlite3
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify
 from flask_jwt_extended import current_user
 from werkzeug.security import generate_password_hash
 
 import db
 import routing as routing_engine
-from auth import EMAIL_RE, MIN_PASSWORD_LENGTH, STAFF_ROLES, normalise_mobile, role_required
+from auth import EMAIL_RE, MIN_PASSWORD_LENGTH, STAFF_ROLES, json_object, normalise_mobile, role_required, text_field
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
@@ -46,14 +46,14 @@ def list_staff():
 @bp.route("/users", methods=["POST"])
 @role_required("admin")
 def create_staff():
-    payload = request.get_json(silent=True) or {}
-    email = (payload.get("email") or "").strip().lower()
-    username = (payload.get("username") or "").strip().lower() or None
-    name = (payload.get("name") or "").strip()
+    payload = json_object()
+    email = text_field(payload, "email").strip().lower()
+    username = text_field(payload, "username").strip().lower() or None
+    name = text_field(payload, "name").strip()
     role = payload.get("role")
-    password = payload.get("password") or ""
-    unit = (payload.get("unit") or "").strip() or None
-    station = (payload.get("station") or "").strip() or None
+    password = text_field(payload, "password")
+    unit = text_field(payload, "unit").strip() or None
+    station = text_field(payload, "station").strip() or None
     capacity = payload.get("capacity")
 
     if not EMAIL_RE.match(email):
@@ -70,7 +70,7 @@ def create_staff():
         return jsonify({"error": "Unknown police station."}), 400
     if username and not re.fullmatch(r"[a-z0-9._-]{3,32}", username):
         return jsonify({"error": "Username must be 3-32 characters: letters, digits, dot, dash or underscore."}), 400
-    if capacity is not None and not (isinstance(capacity, int) and 1 <= capacity <= 100):
+    if capacity is not None and (isinstance(capacity, bool) or not (isinstance(capacity, int) and 1 <= capacity <= 100)):
         return jsonify({"error": "Capacity must be a whole number between 1 and 100."}), 400
     problem = password_problem(password)
     if problem:
@@ -96,7 +96,7 @@ def update_staff(user_id):
     if user is None or user["role"] not in STAFF_ROLES:
         return jsonify({"error": "Staff account not found."}), 404
 
-    payload = request.get_json(silent=True) or {}
+    payload = json_object()
     changes = {}
 
     if "active" in payload:
@@ -109,13 +109,13 @@ def update_staff(user_id):
         changes["active"] = active
 
     if "unit" in payload and user["role"] == "officer":
-        unit = (payload["unit"] or "").strip() or None
+        unit = text_field(payload, "unit").strip() or None
         if unit and not _valid_unit(unit):
             return jsonify({"error": "Unknown unit."}), 400
         changes["unit"] = unit
 
     if "station" in payload and user["role"] == "officer":
-        station = (payload["station"] or "").strip() or None
+        station = text_field(payload, "station").strip() or None
         if station and not db.station_exists(station):
             return jsonify({"error": "Unknown police station."}), 400
         changes["station"] = station
@@ -127,11 +127,11 @@ def update_staff(user_id):
 
     if "capacity" in payload and user["role"] == "officer":
         capacity = payload["capacity"]
-        if not (isinstance(capacity, int) and 1 <= capacity <= 100):
+        if isinstance(capacity, bool) or not (isinstance(capacity, int) and 1 <= capacity <= 100):
             return jsonify({"error": "Capacity must be a whole number between 1 and 100."}), 400
         changes["capacity"] = capacity
 
-    if payload.get("password"):
+    if text_field(payload, "password"):
         problem = password_problem(payload["password"])
         if problem:
             return jsonify({"error": problem}), 400
@@ -170,9 +170,9 @@ def repoint_phone(user_id):
     if user is None or user["role"] != "citizen":
         return jsonify({"error": "Citizen account not found."}), 404
 
-    payload = request.get_json(silent=True) or {}
+    payload = json_object()
     phone = normalise_mobile(payload.get("phone"))
-    reason = (payload.get("reason") or "").strip()
+    reason = text_field(payload, "reason").strip()
     if phone is None:
         return jsonify({"error": "Enter a valid 10-digit Indian mobile number."}), 400
     if not reason:

@@ -114,8 +114,11 @@ check("station preference: a case filed at PS-CENTRAL goes to the PS-CENTRAL off
 # second officer plenty of headroom so capacity is not the deciding factor.
 db.update_user(lps2.user["id"], station="PS-CENTRAL", capacity=50)
 db.update_user(lps.user["id"], capacity=50)
-picks = [lps.post("/api/classify", json={"complaint_text": theft}, headers=lps.h).json["assignment"]["officer_id"]
-         for _ in range(4)]
+# Distinct narratives: identical text within ten minutes is now treated as an
+# accidental resubmission and returns the complaint already filed.
+picks = [lps.post("/api/classify", json={"complaint_text": f"{theft} (incident {i})"}, headers=lps.h)
+         .json["assignment"]["officer_id"]
+         for i in range(4)]
 check("least-loaded balancing across same-station officers",
       lps.user["id"] in picks and lps2.user["id"] in picks, picks)
 db.update_user(lps2.user["id"], station="PS-NORTH", capacity=6)
@@ -225,3 +228,4 @@ codes = [anon.post("/api/auth/login", json={"email": "admin@nivara.test", "passw
 check("login rate limited", codes[5] == 429, codes)
 
 print(f"\n{'ALL PASSED' if not fails else str(fails) + ' FAILED'}")
+sys.exit(1 if fails else 0)

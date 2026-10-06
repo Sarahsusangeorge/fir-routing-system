@@ -20,7 +20,7 @@ export default function RoutingCard({ routing }: RoutingCardProps) {
         <h3 className="text-[28px] font-light text-carbon mt-2 mb-5">{routing.unit}</h3>
         <span className="text-xs uppercase tracking-[0.1em] text-mercury">Routing rationale</span>
         <p className="text-[15px] text-carbon/80 mt-2 leading-[1.5]">{routing.reason}</p>
-        <p className="text-xs text-mercury mt-5">Routing is determined by rule-based section mapping, not manual judgment.</p>
+        <p className="text-xs text-mercury mt-5">Suggested by a rule table that maps sections to units. The handling officer can transfer the case, with a recorded reason.</p>
       </div>
       <RoutingFlow destination={routing.unit} />
     </motion.div>

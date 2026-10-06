@@ -1,12 +1,14 @@
 import { motion } from "framer-motion";
+import ModelBadge from "./ModelBadge";
 import SectionLabel from "./SectionLabel";
 
 interface AnalysisHeaderProps {
   complaintId: number;
   receivedAt: string;
+  modelBackend?: string | null;
 }
 
-export default function AnalysisHeader({ complaintId, receivedAt }: AnalysisHeaderProps) {
+export default function AnalysisHeader({ complaintId, receivedAt, modelBackend }: AnalysisHeaderProps) {
   const formatted = new Date(receivedAt).toLocaleString(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
@@ -20,10 +22,11 @@ export default function AnalysisHeader({ complaintId, receivedAt }: AnalysisHead
       className="flex flex-wrap items-center justify-between gap-3 mb-6"
     >
       <SectionLabel>Analysis complete</SectionLabel>
-      <div className="flex items-center gap-3 text-sm text-mercury">
+      <div className="flex flex-wrap items-center gap-3 text-sm text-mercury">
         <span className="font-medium text-carbon">Complaint #{complaintId}</span>
         <span aria-hidden="true">·</span>
         <span>{formatted}</span>
+        <ModelBadge backend={modelBackend} />
       </div>
     </motion.div>
   );

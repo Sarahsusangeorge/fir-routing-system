@@ -1,0 +1,11 @@
+## ruff (default rules + bugbear + security subset)
+13	E702	[ ] multiple-statements-on-one-line-semicolon
+ 5	F401	[*] unused-import
+ 4	E401	[*] multiple-imports-on-one-line
+ 3	E741	[ ] ambiguous-variable-name
+ 3	E701	[ ] multiple-statements-on-one-line-colon
+ 1	F541	[*] f-string-missing-placeholders
+ 1	S603	[ ] subprocess-without-shell-equals-true
+ 1	S310	[ ] suspicious-url-open-usage
+Found 31 errors.
+[*] 10 fixable with the `--fix` option.

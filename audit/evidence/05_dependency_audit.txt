@@ -1,0 +1,14 @@
+## pip-audit against the resolved environment (2026-10-05)
+No known vulnerabilities found
+
+## npm audit (frontend, incl. dev dependencies)
+2 moderate severity vulnerabilities
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+## npm audit --omit=dev
+found 0 vulnerabilities
+
+## after upgrading vitest to 5.0.3
+found 0 vulnerabilities

@@ -1,4 +1,4 @@
-﻿venv/
+venv/
 node_modules/
 __pycache__/
 fir_system.db
@@ -8,5 +8,7 @@ fir_system.db
 .DS_Store
 *.zip
 .env
-backend/.jwt_secret
+backend/.jwt_secret*
 .vite/
+*.db-wal
+*.db-shm
