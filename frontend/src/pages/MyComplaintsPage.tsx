@@ -65,6 +65,7 @@ function SignOnline({ c, onSigned }: { c: CitizenComplaint; onSigned: (c: Citize
         <button
           onClick={start}
           disabled={busy}
+          aria-label={`Sign online instead, complaint #${c.complaint_id}`}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-carbon text-vellum text-sm font-medium hover:bg-onyx transition-colors disabled:opacity-40"
         >
           {busy ? <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.75} /> : <PenLine className="w-4 h-4" strokeWidth={1.75} />}
@@ -206,6 +207,10 @@ function ChangeNumber() {
             </>
           ) : (
             <>
+              <p className="text-sm text-mercury mb-3">
+                If {formatPhone(sentTo)} can be added to your account, we have texted it a 6-digit code. If no code
+                arrives, the number may already be in use; visit your police station for help.
+              </p>
               <label htmlFor={ids.code} className="block text-sm font-medium text-carbon mb-2">
                 Code sent to {formatPhone(sentTo)}
               </label>

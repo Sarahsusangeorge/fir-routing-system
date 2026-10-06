@@ -13,25 +13,34 @@ const STAGES = [
 const STAGE_DURATION = 320; // ms per stage
 
 interface AnalysisProgressProps {
+  /** True once the server has answered. Until then the last stage is withheld. */
+  done: boolean;
   onComplete: () => void;
 }
 
-export default function AnalysisProgress({ onComplete }: AnalysisProgressProps) {
+const LAST_WORKING_STAGE = STAGES.length - 2;
+
+export default function AnalysisProgress({ done, onComplete }: AnalysisProgressProps) {
   const [stageIndex, setStageIndex] = useState(0);
   const onCompleteRef = useRef(onComplete);
-  onCompleteRef.current = onComplete;
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const duration = prefersReduced ? 60 : STAGE_DURATION;
 
     if (stageIndex >= STAGES.length - 1) {
-      const finish = setTimeout(() => onCompleteRef.current(), duration + 200);
+      const finish = setTimeout(() => onCompleteRef.current(), prefersReduced ? 0 : 200);
       return () => clearTimeout(finish);
     }
-    const t = setTimeout(() => setStageIndex((i) => i + 1), duration);
+    // "Analysis complete" is only announced once the server has actually
+    // answered; until then the animation waits on the last working stage.
+    if (stageIndex >= LAST_WORKING_STAGE && !done) return;
+    const t = setTimeout(() => setStageIndex((i) => i + 1), done ? Math.min(duration, 120) : duration);
     return () => clearTimeout(t);
-  }, [stageIndex]);
+  }, [stageIndex, done]);
 
   const progress = ((stageIndex + 1) / STAGES.length) * 100;
 

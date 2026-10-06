@@ -6,6 +6,8 @@ Track B. Flask API, priority scoring, routing engine, SQLite persistence.
 
 ## Run it
 
+The quickest way is from the repository root: `bash scripts/dev.sh --reset` starts the API (port 5001) and the web app (port 5173) together. See the root [README](../README.md) and [CODESPACES.md](../CODESPACES.md). To run the pieces by hand:
+
 ```bash
 cd backend
 python -m venv venv
@@ -19,6 +21,8 @@ pip install -r requirements.txt
 python seed_demo.py      # creates the database, demo accounts and 15 demo complaints
 python app.py            # starts on http://localhost:5000
 ```
+
+On macOS, port 5000 is taken by AirPlay Receiver. Run `NIVARA_PORT=5001 python app.py` and point the frontend at port 5001.
 
 No database server is needed. SQLite is built into Python, and everything,
 including user accounts, lives in `fir_system.db`.
@@ -133,8 +137,21 @@ Response 200:
 }
 ```
 
-Errors return `{"error": "..."}` with status 400 (bad input) or 500
-(pipeline failure). The API never returns a stack trace.
+Errors return `{"error": "..."}`:
+
+| Status | Meaning |
+|---|---|
+| 400 | Bad or wrongly typed input |
+| 401 | Not signed in, or the session has ended |
+| 403 | Wrong role |
+| 409 | The case changed since you read it, or the signing window has closed |
+| 413 | Body over 256 KiB |
+| 429 | Rate limited |
+| 500 | Pipeline failure |
+
+The API never returns a stack trace.
+
+The same complaint text from the same person within 10 minutes returns the case already filed, with `"duplicate": true`, instead of creating another. If officer allocation fails after the complaint is saved, the case waits in the unassigned queue. Responses also include `model_backend` (the classifier that actually ran) and `priority.review_required` / `priority.review_reasons`, which flag uncertain triage for an officer to check.
 
 A citizen calling `/api/classify` gets a reduced response instead: reference
 number, status, and the unit once an officer has reviewed it. Section
@@ -145,21 +162,20 @@ determination, so they are never shown to complainants.
 
 ## Authentication
 
-**Roles.** Citizens file and track their own complaints. Officers review the
-queue; an officer with a unit sees only that unit's complaints, and one
-without a unit (a duty officer) sees all. Administrators can do everything
-an officer can, plus manage staff accounts.
+**Roles.** Citizens file and track their own complaints. Officers work the cases allocated to them and can read the district's case list. Administrators can do everything an officer can, plus manage staff accounts and reassign cases.
 
-**Sign-in.** Citizens get a 6-digit code on their mobile number or email
-(10-minute expiry, 5 attempts, one request a minute per purpose). They have
-no password to forget, and it fits people who file rarely. Staff use a
-username and password; accounts are created only by an administrator, and a
-staff address cannot sign in with a code.
+**Sign-in.** Citizens get a 6-digit code on their mobile number or email. Limits:
+
+- each code expires in 10 minutes and allows 5 attempts;
+- one code request a minute per purpose;
+- at most 15 wrong codes per address in 6 hours, across all codes.
+
+A code works only for the purpose it was issued for: sign-in, number change or signature. Citizens have no password to forget, which suits people who file rarely. Staff use a username and password; accounts are created only by an administrator, and a staff address cannot sign in with a code.
 
 **Changing a mobile number.** The account, not the number, is the identity.
 A signed-in citizen verifies the new number with a code and keeps every
 complaint; the old number is released into `phone_history` and no longer
-opens the account, so whoever is issued it next gets a new, empty one. A
+opens the account, so whoever is issued it next gets a new, empty one. Changing the number signs out every other session. Requesting a code for a number that is already in use gets the same reply as any other number, so the endpoint does not reveal who is registered. A
 citizen who has lost the old SIM cannot do this themselves, so an
 administrator can re-point the account after verifying identity at the
 station (`PUT /api/admin/users/<id>/phone`), which is recorded with the
@@ -171,12 +187,9 @@ and tick the declaration, and the method and evidence are stored against the
 complaint. Aadhaar e-Sign or a DSC would give the signature statutory
 weight in production; the flow is the same.
 
-**Sessions.** A signed JWT in an httpOnly cookie, so page scripts cannot
-read it. Tokens last 60 minutes and are renewed automatically while the
-user is active. Every POST/PATCH must carry the CSRF token in an
-`X-CSRF-TOKEN` header. The role is re-read from the database on every
-request, so deactivating an account takes effect on the user's next
-action.
+**Sessions.** A signed JWT in an httpOnly cookie, so page scripts cannot read it. Tokens last 60 minutes and are renewed automatically while the user is active, up to 12 hours after sign-in. Every POST/PATCH must carry the CSRF token in an `X-CSRF-TOKEN` header.
+
+Sessions are revocable on the server. Logging out revokes the token, and a password reset, deactivation or phone change ends every session on the account. The role is re-read from the database on every request.
 
 **Protections.** Passwords are stored as salted hashes (Werkzeug) and must
 be 10+ characters with mixed case and a number. After 5 failed sign-ins for
@@ -184,11 +197,9 @@ an email (or 20 from one IP) in 15 minutes, sign-in is blocked for that
 email or IP. A wrong email and a wrong password get the same message, so
 the response doesn't reveal which accounts exist.
 
-**Who can see and do what.** Any officer can read any case in the district
-and see which officer holds it — the transparency the portal is for. Only
-the officer a case is allocated to, or an administrator, can change it or
-write in its diary, and complainant contact details are masked for everyone
-else.
+**Who can see and do what.** Any officer can see the district's case list and which officer holds each case; that transparency is what the portal is for. Only the officer a case is allocated to, or an administrator, can change it or write in its diary. Complainant contact details are masked for everyone else.
+
+Sexual-offence cases (354, 375, 376, 376(2), 509, 366, 366A) and all Women & Child Protection Unit cases are *restricted*. Their narrative, complainant, notes and the complainant's name in the audit trail are visible only to that unit, the assigned officer and administrators (IPC s.228A / BNS s.72). Edits are compare-and-set: if the case changed since it was read, the API returns 409 instead of overwriting.
 
 **Allocation.** New cases are allocated automatically (`workflow.rank_officers`):
 officers on leave are skipped, and the rest are ranked by fit (their unit at
@@ -212,9 +223,15 @@ Registered" requires a note to the complainant. Every action is written
 to `complaint_events`. Closed complaints can only be reopened by an
 administrator.
 
-**Configuration.** Copy `.env.example` to `.env`. Without `SMTP_HOST`,
-sign-in codes are printed to this terminal instead of emailed, which is
-what you want for the demo.
+**Configuration.** Copy `.env.example` to `.env`. In development, without `SMTP_HOST` or an SMS provider, sign-in codes are printed to this terminal, which is what you want for the demo.
+
+With `NIVARA_ENV=production` codes are never printed. The server also refuses to start if any of these is true:
+
+- the JWT secret is short or missing;
+- `NIVARA_COOKIE_SECURE` is not 1;
+- the debugger is on;
+- there is no delivery channel for codes;
+- a demo account still has its published password.
 
 ### Sign-in doesn't stick
 

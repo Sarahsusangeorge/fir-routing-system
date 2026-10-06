@@ -13,7 +13,7 @@ import {
   type StaffAccount,
 } from "../types";
 import { DEMO_USERS, currentDemoRole } from "./auth";
-import { ApiRequestError, apiFetch, AuthError, isDemoMode, NetworkError } from "./http";
+import { ApiRequestError, apiFetch, AuthError, isDemoMode, NetworkError, setCsrfToken } from "./http";
 import { classifyLocally } from "./localClassifier";
 import { MOCK_COMPLAINTS } from "./mockData";
 
@@ -97,11 +97,15 @@ export async function classifyComplaint(complaintText: string): Promise<Complain
         trimmed
       );
     } catch (err) {
-      // Only an unreachable backend falls back to the local classifier. A
-      // rejected request (bad input, expired session) is reported as is.
-      if (!(err instanceof NetworkError)) {
-        throw new ClassificationError(messageFrom(err, "The classification service could not be reached."));
+      // Never fall back to the local demo classifier when a real backend is
+      // configured: that would show a made-up case number and allocation for
+      // a complaint that was never saved.
+      if (err instanceof NetworkError) {
+        throw new ClassificationError(
+          "The complaint could not be sent because the NIVARA service is unreachable. Nothing was saved; your text is still here, so try again."
+        );
       }
+      throw new ClassificationError(messageFrom(err, "The classification service could not be reached."));
     }
   }
 
@@ -127,13 +131,10 @@ export async function fetchCases(
     const params = new URLSearchParams({ limit: "200", scope });
     if (view === "mine") params.set("view", "mine");
     else if (officer !== "all") params.set("officer", String(officer));
-    try {
-      const data = await apiFetch<{ complaints: Complaint[] }>(`/api/complaints?${params}`);
-      return data.complaints.map((c) => normalizeComplaint(c));
-    } catch (err) {
-      // A rejected request must not be papered over with demo data.
-      if (!(err instanceof NetworkError)) throw err;
-    }
+    // Errors propagate: the case portal must never show synthetic records in
+    // place of the real queue, even when the backend is unreachable.
+    const data = await apiFetch<{ complaints: Complaint[] }>(`/api/complaints?${params}`);
+    return data.complaints.map((c) => normalizeComplaint(c));
   }
 
   await wait(350);
@@ -539,10 +540,14 @@ export async function requestNumberChange(phone: string): Promise<string> {
 }
 
 export async function confirmNumberChange(phone: string, code: string) {
-  return apiFetch<{ user: { phone: string }; previous_phone: string }>("/api/auth/phone/change/verify", {
-    method: "POST",
-    body: JSON.stringify({ phone, code }),
-  });
+  // The backend ends every other session on the account and issues this one
+  // a fresh token, so pick up its new CSRF token.
+  const res = await apiFetch<{ user: { phone: string }; previous_phone: string; csrf_token?: string }>(
+    "/api/auth/phone/change/verify",
+    { method: "POST", body: JSON.stringify({ phone, code }) }
+  );
+  if (res.csrf_token) setCsrfToken(res.csrf_token);
+  return res;
 }
 
 export async function requestSignatureCode(id: number): Promise<"sms" | "email"> {

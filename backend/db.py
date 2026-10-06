@@ -14,7 +14,7 @@ import sqlite3
 import workflow
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "fir_system.db")
+DB_PATH = os.environ.get("NIVARA_DB_PATH") or os.path.join(BASE_DIR, "fir_system.db")
 
 
 def get_connection():
@@ -118,6 +118,11 @@ _COMPLAINT_COLUMNS = {
     "signature_method": "TEXT",
     "signature_evidence": "TEXT",
     "station": "TEXT",
+    # Which classifier actually produced the predictions, so a later model
+    # swap can be reconciled against what was decided at the time.
+    "model_backend": "TEXT",
+    # JSON list of reasons an officer should double-check the triage.
+    "review_flags": "TEXT",
 }
 
 # Columns added to users after the first release of authentication.
@@ -126,7 +131,12 @@ _USER_EXTRA_COLUMNS = {
     "station": "TEXT",
     "availability": "TEXT NOT NULL DEFAULT 'available'",
     "capacity": "INTEGER NOT NULL DEFAULT 10",
+    "token_version": "INTEGER NOT NULL DEFAULT 0",
 }
+
+
+class Conflict(Exception):
+    """The record changed after it was read; the caller's update was not applied."""
 
 
 def _migrate_complaints(conn):
@@ -137,6 +147,9 @@ def _migrate_complaints(conn):
     if "username" not in users:
         # UNIQUE cannot be added by ALTER TABLE; a unique index does the same job.
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+
+    if "purpose" not in _columns(conn, "login_codes"):
+        conn.execute("ALTER TABLE login_codes ADD COLUMN purpose TEXT NOT NULL DEFAULT 'sign-in'")
 
     existing = _columns(conn, "complaints")
     for column, definition in _COMPLAINT_COLUMNS.items():
@@ -230,7 +243,8 @@ def _add_event(conn, complaint_id, actor_id, action, detail):
 
 
 def save_complaint(text, sections, priority, routing, explanation=None,
-                   filed_by=None, source="officer", station=None):
+                   filed_by=None, source="officer", station=None,
+                   model_backend=None, review_flags=None):
     """
     Persist a complaint, its predicted sections and its token attributions
     in one transaction. Returns (complaint_id, received_at).
@@ -240,11 +254,13 @@ def save_complaint(text, sections, priority, routing, explanation=None,
         cur = conn.execute(
             """INSERT INTO complaints
                (complaint_text, priority_level, priority_score,
-                routed_unit, routing_reason, explanation, filed_by, source, station)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                routed_unit, routing_reason, explanation, filed_by, source, station,
+                model_backend, review_flags)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (text, priority["level"], priority["score"],
              routing["unit"], routing["reason"],
-             json.dumps(explanation or []), filed_by, source, station),
+             json.dumps(explanation or []), filed_by, source, station,
+             model_backend, json.dumps(review_flags or [])),
         )
         complaint_id = cur.lastrowid
 
@@ -298,13 +314,19 @@ def _complaint_dict(conn, r):
         explanation = json.loads(r["explanation"] or "[]")
     except (TypeError, ValueError):
         explanation = []
+    try:
+        flags = json.loads(r["review_flags"] or "[]")
+    except (TypeError, ValueError):
+        flags = []
 
     return {
         "complaint_id": r["id"],
         "complaint_text": r["complaint_text"],
         "received_at": r["received_at"],
         "status": r["status"],
-        "priority": {"level": r["priority_level"], "score": r["priority_score"]},
+        "priority": {"level": r["priority_level"], "score": r["priority_score"],
+                     "review_required": bool(flags), "review_reasons": flags},
+        "model_backend": r["model_backend"],
         "routing": {"unit": r["routed_unit"], "reason": r["routing_reason"]},
         "sections": [dict(s) for s in secs],
         "explanation": explanation,
@@ -393,12 +415,21 @@ def get_complaint(complaint_id):
         conn.close()
 
 
-def review_complaint(complaint_id, actor_id, changes, events):
+_UNCHECKED = object()
+
+
+def review_complaint(complaint_id, actor_id, changes, events,
+                     expected_status=_UNCHECKED, expected_assignee=_UNCHECKED, mark_reviewed=True):
     """
     Apply an officer's review in one transaction.
 
     changes: {column: value} for the complaints row
     events:  [(action, detail), ...] written to the audit trail
+    expected_status / expected_assignee: the values the caller's decision was
+        based on. If the row no longer has them (someone else acted in the
+        meantime), nothing is written and Conflict is raised.
+    mark_reviewed: False for changes that are not an officer's review (the
+        complainant signing online), so reviewed_by/at stay an officer's.
     """
     allowed = {"status", "routed_unit", "officer_note", "original_unit",
                "override_reason", "signature_confirmed_at", "signature_method",
@@ -406,15 +437,26 @@ def review_complaint(complaint_id, actor_id, changes, events):
     if not set(changes) <= allowed:
         raise ValueError(f"Unexpected columns: {set(changes) - allowed}")
 
+    guard, guard_params = "", []
+    if expected_status is not _UNCHECKED:
+        guard += " AND status = ?"
+        guard_params.append(expected_status)
+    if expected_assignee is not _UNCHECKED:
+        guard += " AND assigned_to IS ?"
+        guard_params.append(expected_assignee)
+
     conn = get_connection()
     try:
         extra = ", assigned_at = datetime('now')" if "assigned_to" in changes else ""
         assignments = ", ".join(f"{col} = ?" for col in changes)
-        conn.execute(
-            f"UPDATE complaints SET {assignments}{extra}, reviewed_by = ?, "
-            f"reviewed_at = datetime('now') WHERE id = ?",
-            list(changes.values()) + [actor_id, complaint_id],
+        reviewed = ", reviewed_by = ?, reviewed_at = datetime('now')" if mark_reviewed else ""
+        cur = conn.execute(
+            f"UPDATE complaints SET {assignments}{extra}{reviewed} WHERE id = ?{guard}",
+            list(changes.values()) + ([actor_id] if mark_reviewed else []) + [complaint_id] + guard_params,
         )
+        if cur.rowcount == 0:
+            conn.rollback()
+            raise Conflict(complaint_id)
         if "assigned_to" in changes:
             officer = conn.execute(
                 "SELECT name FROM users WHERE id = ?", (changes["assigned_to"],)
@@ -527,9 +569,20 @@ def allocate(complaint_id, actor_id=None, exclude_id=None):
     Assign the complaint to the best-fitting, least-loaded officer for its
     unit and station (see workflow.rank_officers). Returns the officer's id,
     or None if nobody is eligible.
+
+    Reading every officer's current load and then writing the chosen one is
+    two steps, so two requests arriving at the same time could both read the
+    same "least loaded" officer before either write lands, and both assign
+    their case to them -- overshooting that officer's capacity while a
+    colleague at zero load gets nothing. BEGIN IMMEDIATE takes SQLite's
+    write lock before the read, so a second concurrent call blocks until the
+    first one's write has committed and then reads the updated load,
+    closing the race instead of racing on a stale snapshot.
     """
     conn = get_connection()
+    conn.isolation_level = None  # manage the transaction explicitly below
     try:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT routed_unit, station FROM complaints WHERE id = ?", (complaint_id,)
         ).fetchone()
@@ -542,7 +595,7 @@ def allocate(complaint_id, actor_id=None, exclude_id=None):
             )
             _add_event(conn, complaint_id, actor_id, "assigned",
                        f"No officer available for {row['routed_unit']}; awaiting assignment")
-            conn.commit()
+            conn.execute("COMMIT")
             return None
 
         best = ranked[0]
@@ -553,8 +606,11 @@ def allocate(complaint_id, actor_id=None, exclude_id=None):
         detail = (f"Assigned to {best['name']} "
                   f"({best['open_cases']} open cases, workload {int(best['load_ratio'] * 100)}% of capacity)")
         _add_event(conn, complaint_id, actor_id, "assigned", detail)
-        conn.commit()
+        conn.execute("COMMIT")
         return best["id"]
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     finally:
         conn.close()
 
@@ -607,7 +663,7 @@ def allocate_unassigned(actor_id=None):
 # ---------------------------------------------------------------------------
 
 _USER_COLUMNS = ("id, username, email, phone, name, role, unit, station, availability, "
-                 "capacity, contact_email, contact_phone, active, created_at, last_login_at")
+                 "capacity, contact_email, contact_phone, active, created_at, last_login_at, token_version")
 
 
 def get_user(user_id):
@@ -671,7 +727,10 @@ def update_user(user_id, **fields):
     conn = get_connection()
     try:
         assignments = ", ".join(f"{k} = ?" for k in fields)
-        conn.execute(f"UPDATE users SET {assignments} WHERE id = ?",
+        # A new password or a change of active status ends every existing
+        # session, so a stolen token cannot outlive a reset or a reactivation.
+        revoke = ", token_version = token_version + 1" if {"password_hash", "active"} & set(fields) else ""
+        conn.execute(f"UPDATE users SET {assignments}{revoke} WHERE id = ?",
                      list(fields.values()) + [user_id])
         conn.commit()
     finally:
@@ -726,34 +785,81 @@ def count_active_admins():
 # One-time codes and rate limiting
 # ---------------------------------------------------------------------------
 
-def store_login_code(identifier, channel, code_hash, ttl_minutes):
+def store_login_code(identifier, channel, code_hash, ttl_minutes, purpose="sign-in"):
     conn = get_connection()
     try:
-        # A new code replaces any earlier unused one.
+        # A new code replaces any earlier unused one for the same purpose.
         conn.execute(
             "UPDATE login_codes SET used_at = datetime('now') "
-            "WHERE identifier = ? AND used_at IS NULL", (identifier,)
+            "WHERE identifier = ? AND purpose = ? AND used_at IS NULL", (identifier, purpose)
         )
         conn.execute(
-            "INSERT INTO login_codes (identifier, channel, code_hash, expires_at) "
-            "VALUES (?, ?, ?, datetime('now', ?))",
-            (identifier, channel, code_hash, f"+{int(ttl_minutes)} minutes"),
+            "INSERT INTO login_codes (identifier, channel, purpose, code_hash, expires_at) "
+            "VALUES (?, ?, ?, ?, datetime('now', ?))",
+            (identifier, channel, purpose, code_hash, f"+{int(ttl_minutes)} minutes"),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def get_active_login_code(identifier):
+def get_active_login_code(identifier, purpose="sign-in"):
     conn = get_connection()
     row = conn.execute(
         """SELECT * FROM login_codes
-           WHERE identifier = ? AND used_at IS NULL AND expires_at > datetime('now')
+           WHERE identifier = ? AND purpose = ? AND used_at IS NULL AND expires_at > datetime('now')
            ORDER BY id DESC LIMIT 1""",
-        (identifier,),
+        (identifier, purpose),
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Session revocation
+# ---------------------------------------------------------------------------
+
+def bump_token_version(user_id):
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE users SET token_version = token_version + 1 WHERE id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def revoke_token(jti, exp_epoch):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM revoked_tokens WHERE expires_at < datetime('now')")
+        conn.execute(
+            "INSERT OR IGNORE INTO revoked_tokens (jti, expires_at) VALUES (?, datetime(?, 'unixepoch'))",
+            (jti, int(exp_epoch or 0)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def is_token_revoked(jti):
+    if not jti:
+        return True
+    conn = get_connection()
+    row = conn.execute("SELECT 1 FROM revoked_tokens WHERE jti = ?", (jti,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def find_recent_duplicate(filed_by, text, minutes):
+    """The id of an identical complaint the same person filed in the last `minutes`, if any."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id FROM complaints WHERE filed_by = ? AND complaint_text = ? "
+        "AND received_at > datetime('now', ?) ORDER BY id DESC LIMIT 1",
+        (filed_by, text, f"-{int(minutes)} minutes"),
+    ).fetchone()
+    conn.close()
+    return row["id"] if row else None
 
 
 def bump_code_attempts(code_id):
@@ -811,7 +917,9 @@ def change_phone(user_id, new_phone, changed_by, reason):
     conn = get_connection()
     try:
         old = conn.execute("SELECT phone FROM users WHERE id = ?", (user_id,)).fetchone()["phone"]
-        conn.execute("UPDATE users SET phone = ? WHERE id = ?", (new_phone, user_id))
+        # Whoever holds the old SIM may still have a session open; end it.
+        conn.execute("UPDATE users SET phone = ?, token_version = token_version + 1 WHERE id = ?",
+                     (new_phone, user_id))
         if old:
             conn.execute(
                 "INSERT INTO phone_history (user_id, phone, changed_by, reason) VALUES (?, ?, ?, ?)",

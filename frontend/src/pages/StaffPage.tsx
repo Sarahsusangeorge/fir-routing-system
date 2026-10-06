@@ -173,6 +173,13 @@ export default function StaffPage() {
   useEffect(load, []);
 
   const toggleActive = async (account: StaffAccount) => {
+    if (account.active) {
+      const consequence =
+        account.role === "officer" && account.open_cases > 0
+          ? ` Their ${account.open_cases} open case${account.open_cases === 1 ? "" : "s"} will be moved to other officers, and they will be signed out everywhere.`
+          : " They will be signed out everywhere.";
+      if (!window.confirm(`Deactivate ${account.name}?${consequence}`)) return;
+    }
     setPendingId(account.id);
     setRowError(null);
     try {
@@ -204,8 +211,10 @@ export default function StaffPage() {
         Staff accounts
       </motion.h1>
       <p className="text-base text-mercury mt-4 max-w-xl">
-        Officers and administrators can only be added here. An officer assigned to a unit sees only that unit's
-        complaints; a duty officer sees all of them.
+        Officers and administrators can only be added here. New cases are allocated to officers by unit, station and
+        workload. Every officer can see the district's case list and who holds each case, but only the assigned
+        officer or an administrator can act on a case, and sexual-offence and Women &amp; Child Protection Unit cases
+        are readable only by that unit.
       </p>
 
       <div className="bg-paper border border-line rounded-[24px] p-6 md:p-8 mt-10">

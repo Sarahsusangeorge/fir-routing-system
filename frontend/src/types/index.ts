@@ -13,6 +13,10 @@ export interface Priority {
   driver?: string;
   /** Human-readable one-line justification, e.g. "Driven by Section 392: severity 8 x confidence 0.87 = 7". */
   basis?: string;
+  /** True when the triage is uncertain and an officer should check it. */
+  review_required?: boolean;
+  /** Plain-language reasons for review_required. */
+  review_reasons?: string[];
 }
 
 export interface Routing {
@@ -103,6 +107,12 @@ export interface Complaint {
   /** False when an officer may read the case but not act on it. */
   can_act?: boolean;
   station?: string | null;
+  /** Which classifier produced the predictions, e.g. "keyword-stub" or "distilbert". */
+  model_backend?: string | null;
+  /** Narrative and complainant withheld: only the handling unit may read them. */
+  restricted?: boolean;
+  /** The same complaint was already filed moments ago; this is that record. */
+  duplicate?: boolean;
 }
 
 /** What a complainant sees about their own complaint. */
@@ -125,6 +135,8 @@ export interface CitizenComplaint {
   /** True while the complainant may still sign online. */
   can_sign_digitally?: boolean;
   events?: { action: string; detail: string | null; created_at: string }[];
+  /** The same complaint was already filed moments ago; this is that record. */
+  duplicate?: boolean;
 }
 
 export interface ReviewRequest {

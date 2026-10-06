@@ -23,6 +23,25 @@ export default function ComplaintScanner({ open, onClose, onExtracted }: Complai
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Keep Tab and Shift+Tab inside the dialog while it is open (WCAG 2.4.3).
+  const trapFocus = (e: React.KeyboardEvent) => {
+    if (e.key !== "Tab" || !dialogRef.current) return;
+    const focusable = Array.from(
+      dialogRef.current.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([type=hidden]):not(.hidden), [tabindex]:not([tabindex='-1'])")
+    ).filter((el) => el.offsetParent !== null);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   const reset = () => {
     setState("choose");
@@ -37,6 +56,7 @@ export default function ComplaintScanner({ open, onClose, onExtracted }: Complai
 
   useEffect(() => {
     if (!open) return;
+    const opener = document.activeElement as HTMLElement | null;
     reset();
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
@@ -47,6 +67,8 @@ export default function ComplaintScanner({ open, onClose, onExtracted }: Complai
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
+      // Return focus to the control that opened the dialog.
+      opener?.focus?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -102,6 +124,8 @@ export default function ComplaintScanner({ open, onClose, onExtracted }: Complai
           />
           <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="presentation">
             <motion.div
+              ref={dialogRef}
+              onKeyDown={trapFocus}
               role="dialog"
               aria-modal="true"
               aria-labelledby="scanner-title"
@@ -131,7 +155,8 @@ export default function ComplaintScanner({ open, onClose, onExtracted }: Complai
               {state === "choose" && (
                 <div>
                   <p className="text-sm text-mercury mb-6">
-                    Capture a physical document or upload a photo. Extracted text stays fully editable before analysis.
+                    Capture a physical document or upload a photo. The text is read on this device; the photo is not
+                    uploaded. You can correct the extracted text before submitting.
                   </p>
                   <div className="grid grid-cols-2 gap-3">
                     <button

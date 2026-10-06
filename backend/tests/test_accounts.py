@@ -101,7 +101,9 @@ check("cannot sign twice", r.status_code == 409)
 # ---------------- changing phone number
 clear_limits()
 r, change_code = code_for(citizen, "/api/auth/phone/change/request", {"phone": "9123456780"})
-check("cannot move to a number in use", r.status_code == 409, r.json)
+# Audit change: the reply no longer reveals that a number is registered (that
+# let any citizen probe who has filed police complaints); no code is sent.
+check("cannot move to a number in use", r.status_code == 200 and change_code is None, r.json)
 before = [c["complaint_id"] for c in citizen.get("/api/my/complaints").json["complaints"]]
 r, change_code = code_for(citizen, "/api/auth/phone/change/request", {"phone": "9555500001"})
 check("change code sent to the new number", r.status_code == 200 and change_code, r.json)
@@ -142,7 +144,8 @@ check("view=mine gives own caseload", mine and all(c["assignment"]["officer_id"]
 check("filter by station", all(c["station"] == "PS-NORTH" for c in arjun.get("/api/complaints?station=PS-NORTH").json["complaints"]))
 others = [c for c in all_cases if c["assignment"]["officer_id"] != arjun.user["id"] and c["complainant"]]
 check("complainant contact masked on other officers' cases",
-      bool(others) and others[0]["complainant"]["masked"] and "****" in (others[0]["complainant"]["phone"] or ""), others[:1])
+      bool(others) and others[0]["complainant"]["masked"]
+      and "••••••" in (others[0]["complainant"]["phone"] or ""), others[:1])
 d = arjun.get(f"/api/complaints/{others[0]['complaint_id']}").json
 check("other officer's case is read-only", d["can_act"] is False and d["allowed_statuses"] == [])
 check("case diary stays with the assigned officer", all(e["action"] != "diary_entry" for e in d["events"]))
@@ -197,3 +200,4 @@ check("duplicate username rejected", r.status_code == 409, r.json)
 check("stations listed", len(admin.get("/api/stations").json["stations"]) == 4)
 
 print(f"\n{'ALL PASSED' if not fails else str(fails) + ' FAILED'}")
+sys.exit(1 if fails else 0)

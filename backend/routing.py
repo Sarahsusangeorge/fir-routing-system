@@ -48,11 +48,13 @@ def route_complaint(sections, rules, section_titles=None):
             "matched_section": None,
         }
 
-    # Lowest precedence wins; ties broken by the higher-confidence section.
+    # Lowest precedence wins; ties broken by the higher-confidence section,
+    # then by section code, so the result never depends on the order the
+    # database happens to return rules in.
     confidence = {s["code"]: float(s["confidence"]) for s in sections}
     winner = min(
         applicable,
-        key=lambda r: (r["precedence"], -confidence.get(r["section_code"], 0.0)),
+        key=lambda r: (r["precedence"], -confidence.get(r["section_code"], 0.0), r["section_code"]),
     )
 
     code = winner["section_code"]

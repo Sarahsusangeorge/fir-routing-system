@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import ComplaintStatusBadge from "../components/ComplaintStatusBadge";
 import ErrorState from "../components/ErrorState";
 import ExplainabilityViewer from "../components/ExplainabilityViewer";
+import ModelBadge from "../components/ModelBadge";
 import { PageLoader } from "../components/RequireRole";
 import PriorityCard from "../components/PriorityCard";
 import RoutingCard from "../components/RoutingCard";
@@ -380,8 +381,9 @@ export default function CasePage() {
       {readOnly && (
         <p className="flex items-start gap-2 text-sm text-carbon bg-paper border border-line rounded-[16px] px-5 py-4 mt-6 max-w-2xl">
           <Lock className="w-4 h-4 mt-0.5 shrink-0 text-mercury" strokeWidth={1.75} aria-hidden="true" />
-          This case is allocated to {c.assignment?.officer_name ?? "no one yet"}. You can read it in full, but only
-          they or an administrator can act on it.
+          {c.restricted
+            ? `This case is allocated to ${c.assignment?.officer_name ?? "no one yet"} in the ${c.routing.unit}. To protect the complainant, its account and identity are visible only to that unit, the investigating officer and administrators.`
+            : `This case is allocated to ${c.assignment?.officer_name ?? "no one yet"}. You can read it, but only they or an administrator can act on it. The complainant's contact details are hidden.`}
         </p>
       )}
 
@@ -438,6 +440,11 @@ export default function CasePage() {
                 </Row>
               )}
               {review?.original_unit && <Row label="Originally">{review.original_unit}</Row>}
+              {c.model_backend && (
+                <Row label="Classifier">
+                  <ModelBadge backend={c.model_backend} bare />
+                </Row>
+              )}
             </div>
           </section>
 

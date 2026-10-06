@@ -7,6 +7,7 @@ import ComplaintScanner from "../components/ComplaintScanner";
 import SectionLabel from "../components/SectionLabel";
 import { useAuth } from "../context/useAuth";
 import { fileCitizenComplaint } from "../services/api";
+import { NetworkError } from "../services/http";
 import type { CitizenComplaint } from "../types";
 import { formatDate, formatDateTime, loginLabel } from "../utils/format";
 
@@ -37,7 +38,13 @@ export default function FileComplaintPage() {
       setText("");
       setDeclared(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Your complaint could not be filed. Try again.");
+      setError(
+        err instanceof NetworkError
+          ? "Your complaint could not be sent because the service is unreachable. Nothing was filed; your text is still here, so try again in a moment."
+          : err instanceof Error
+            ? err.message
+            : "Your complaint could not be filed. Try again."
+      );
     } finally {
       setBusy(false);
     }
@@ -52,7 +59,11 @@ export default function FileComplaintPage() {
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
         className="text-[32px] md:text-[52px] font-light leading-[1.05] tracking-[0.01em] text-carbon max-w-3xl"
       >
-        {filed ? "Your complaint has been received." : "Tell the police what happened."}
+        {filed
+          ? filed.duplicate
+            ? "We already have this complaint."
+            : "Your complaint has been received."
+          : "Tell the police what happened."}
       </motion.h1>
 
       {filed ? (
@@ -72,6 +83,12 @@ export default function FileComplaintPage() {
               <p className="text-sm text-mercury">Reference number</p>
               <p className="text-[34px] font-light text-carbon tabular-nums leading-tight">#{filed.complaint_id}</p>
               <p className="text-sm text-mercury mt-1">Received {formatDateTime(filed.received_at)}</p>
+              {filed.duplicate && (
+                <p className="text-sm text-carbon mt-3 max-w-md">
+                  You sent the same complaint a few minutes ago, so it was not filed twice. This is its reference
+                  number.
+                </p>
+              )}
             </div>
           </div>
 
@@ -79,15 +96,16 @@ export default function FileComplaintPage() {
           <ol className="flex flex-col gap-4 text-[15px] text-carbon/90 leading-[1.55] list-decimal pl-5">
             <li>Your complaint goes to an officer in the unit that handles this kind of case, who reviews it.</li>
             <li>
-              Visit your police station to sign your complaint
+              Sign your complaint
               {filed.signature_due_at ? (
                 <>
                   {" "}
                   by <strong className="font-medium">{formatDate(filed.signature_due_at)}</strong>
                 </>
               ) : null}
-              . A complaint given online must be signed within three days before it can be registered as an FIR.
-              Bring your reference number and a photo ID.
+              , either online from My complaints with a code sent to your phone, or at your police station with your
+              reference number and a photo ID. A complaint given online must be signed within three days before it
+              can be registered as an FIR.
             </li>
             <li>
               Follow its progress under My complaints, including the investigating officer's name and any notes they
@@ -116,6 +134,10 @@ export default function FileComplaintPage() {
           <p className="text-base text-mercury mt-6 max-w-xl leading-[1.55]">
             Describe the incident in your own words: what happened, when and where, and anyone involved. An officer
             will read it and decide how it is handled. In an emergency, call 112.
+          </p>
+          <p role="note" className="text-sm text-carbon mt-3 max-w-xl leading-[1.55] border-l-2 border-carbon pl-3">
+            Student research prototype, not an official police service. Use made-up details only; do not report a
+            real incident here.
           </p>
 
           <motion.div

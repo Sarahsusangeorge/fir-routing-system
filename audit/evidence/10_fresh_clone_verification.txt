@@ -1,0 +1,22 @@
+# Fresh-clone verification 2026-10-06 18:19:24 UTC — commit f1752c6, 128 tracked files
+
+## scripts/setup.sh
+
+added 149 packages in 2s
+Setup done. Start NIVARA with: bash scripts/dev.sh
+python used: Python 3.14.5
+
+## backend: pytest
+======================= 216 passed, 1 xfailed in 10.41s ========================
+
+## frontend: tests, type check + build, Pages build
+ Test Files  2 passed (2)
+      Tests  15 passed (15)
+✓ built in 1.43s
+✓ built in 208ms
+1
+
+## demo data seeded by setup: 15 complaints
+
+## scripts/dev.sh --reset (run from the fresh clone, outside the iCloud Desktop)
+API and web started; via the same-origin proxy: OTP request 200, sign-in 200, complaint filed 200 (reference #16, status New), /api/my/complaints returned 5; /api/health: keyword-stub, 100 sections.

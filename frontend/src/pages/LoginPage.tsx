@@ -33,16 +33,21 @@ function Field({
 }: {
   label: string;
   hint?: string;
-  children: (id: string) => React.ReactNode;
+  children: (id: string, describedBy?: string) => React.ReactNode;
 }) {
   const id = useId();
+  const hintId = `${id}-hint`;
   return (
     <div>
       <label htmlFor={id} className="block text-sm font-medium text-carbon mb-2">
         {label}
       </label>
-      {children(id)}
-      {hint && <p className="text-xs text-mercury mt-2">{hint}</p>}
+      {children(id, hint ? hintId : undefined)}
+      {hint && (
+        <p id={hintId} className="text-xs text-mercury mt-2">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }
@@ -144,13 +149,14 @@ function CitizenSignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
 
         {isSms ? (
           <Field label="Mobile number" hint="We'll text you a one-time code. Indian mobile numbers only.">
-            {(id) => (
+            {(id, describedBy) => (
               <div className="flex rounded-[10px] border border-line bg-vellum/40 focus-within:ring-2 focus-within:ring-carbon/30 focus-within:border-carbon/40">
                 <span className="pl-4 pr-2 py-3 text-[16px] text-mercury select-none" aria-hidden="true">
                   +91
                 </span>
                 <input
                   id={id}
+                  aria-describedby={describedBy}
                   type="tel"
                   inputMode="tel"
                   autoComplete="tel-national"
@@ -165,9 +171,10 @@ function CitizenSignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
           </Field>
         ) : (
           <Field label="Email address" hint="We'll email you a one-time code. No password needed.">
-            {(id) => (
+            {(id, describedBy) => (
               <input
                 id={id}
+                aria-describedby={describedBy}
                 type="email"
                 autoComplete="email"
                 inputMode="email"
@@ -193,9 +200,10 @@ function CitizenSignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
     <form onSubmit={submitCode} className="flex flex-col gap-5" noValidate>
       {notice && <p className="text-sm text-mercury">{notice}</p>}
       <Field label="Sign-in code">
-        {(id) => (
+        {(id, describedBy) => (
           <input
             id={id}
+            aria-describedby={describedBy}
             inputMode="numeric"
             autoComplete="one-time-code"
             pattern="\d{6}"
@@ -212,9 +220,10 @@ function CitizenSignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
       {needsName && (
         <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-5">
           <Field label="Full name" hint="As it should appear on your complaint.">
-            {(id) => (
+            {(id, describedBy) => (
               <input
                 id={id}
+                aria-describedby={describedBy}
                 autoComplete="name"
                 required
                 value={name}
@@ -227,9 +236,10 @@ function CitizenSignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
             label={isSms ? "Email address (optional)" : "Mobile number (optional)"}
             hint="Another way for the police to reach you about your complaint."
           >
-            {(id) => (
+            {(id, describedBy) => (
               <input
                 id={id}
+                aria-describedby={describedBy}
                 type={isSms ? "email" : "tel"}
                 autoComplete={isSms ? "email" : "tel"}
                 value={contact}
@@ -301,11 +311,14 @@ function StaffSignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-5" noValidate>
-      <Field label="Official email">
-        {(id) => (
+      <Field label="Username or official email">
+        {(id, describedBy) => (
           <input
             id={id}
-            type="email"
+            aria-describedby={describedBy}
+            type="text"
+            autoCapitalize="none"
+            spellCheck={false}
             autoComplete="username"
             required
             value={email}
@@ -315,9 +328,10 @@ function StaffSignIn({ onSignedIn }: { onSignedIn: (u: User) => void }) {
         )}
       </Field>
       <Field label="Password" hint="Staff accounts are issued by your administrator.">
-        {(id) => (
+        {(id, describedBy) => (
           <input
             id={id}
+            aria-describedby={describedBy}
             type="password"
             autoComplete="current-password"
             required
@@ -399,6 +413,10 @@ export default function LoginPage() {
             In an emergency, call 112. Online complaints are reviewed by an officer and are not a substitute for
             urgent help.
           </p>
+          <p role="note" className="text-sm text-carbon mt-4 max-w-md leading-[1.55] border-l-2 border-carbon pl-3">
+            NIVARA is a student research prototype, not an official police service. Do not report real incidents
+            here.
+          </p>
         </div>
 
         <motion.div
@@ -421,9 +439,20 @@ export default function LoginPage() {
                 {(["citizen", "staff"] as Audience[]).map((a) => (
                   <button
                     key={a}
+                    id={`signin-tab-${a}`}
                     role="tab"
                     aria-selected={audience === a}
+                    aria-controls="signin-panel"
+                    tabIndex={audience === a ? 0 : -1}
                     onClick={() => setAudience(a)}
+                    onKeyDown={(e) => {
+                      // WAI-ARIA tabs: arrow keys move between tabs.
+                      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                      e.preventDefault();
+                      const next: Audience = audience === "citizen" ? "staff" : "citizen";
+                      setAudience(next);
+                      document.getElementById(`signin-tab-${next}`)?.focus();
+                    }}
                     className={`relative py-2.5 rounded-full text-sm transition-colors ${
                       audience === a ? "text-carbon" : "text-mercury hover:text-carbon"
                     }`}
@@ -439,7 +468,7 @@ export default function LoginPage() {
                   </button>
                 ))}
               </div>
-              <div role="tabpanel">
+              <div role="tabpanel" id="signin-panel" aria-labelledby={`signin-tab-${audience}`}>
                 {audience === "citizen" ? (
                   <CitizenSignIn onSignedIn={onSignedIn} />
                 ) : (

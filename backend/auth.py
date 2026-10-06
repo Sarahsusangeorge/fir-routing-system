@@ -49,7 +49,8 @@ from flask_jwt_extended import (
     unset_jwt_cookies,
     verify_jwt_in_request,
 )
-from werkzeug.security import check_password_hash
+from werkzeug.exceptions import BadRequest
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import db
 
@@ -78,6 +79,46 @@ INDIAN_MOBILE_RE = re.compile(r"^[6-9]\d{9}$")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SECRET_FILE = os.path.join(BASE_DIR, ".jwt_secret")
 
+# A sign-in stays valid at most this long, however often the sliding renewal
+# below re-issues the token.
+MAX_SESSION_HOURS = 12
+
+# Wrong one-time codes allowed per address across all codes in the window.
+# Requesting a fresh code does not reset this, so an attacker cannot turn the
+# per-code limit into unlimited guesses.
+OTP_FAIL_LIMIT = 15
+OTP_FAIL_WINDOW_SECONDS = 6 * 3600
+
+_DUMMY_HASH = generate_password_hash(secrets.token_urlsafe(16))
+
+PURPOSE_SIGN_IN = "sign-in"
+PURPOSE_NUMBER_CHANGE = "number change"
+PURPOSE_SIGNATURE = "signature"
+
+
+def is_production():
+    return os.environ.get("NIVARA_ENV", "development").strip().lower() == "production"
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
+
+def json_object():
+    """The request body as a JSON object; anything else is treated as empty."""
+    payload = request.get_json(silent=True)
+    return payload if isinstance(payload, dict) else {}
+
+
+def text_field(payload, key, default=""):
+    """A string field from a JSON body. Any other type is a client error."""
+    value = payload.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise BadRequest(f"{key} must be text.")
+    return value
+
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -92,11 +133,14 @@ def _load_secret():
     secret = os.environ.get("NIVARA_JWT_SECRET")
     if secret:
         return secret
+    if is_production():
+        raise RuntimeError("NIVARA_JWT_SECRET must be set when NIVARA_ENV=production.")
     if os.path.exists(SECRET_FILE):
         with open(SECRET_FILE, "r", encoding="utf-8") as f:
             return f.read().strip()
     secret = secrets.token_urlsafe(48)
-    with open(SECRET_FILE, "w", encoding="utf-8") as f:
+    fd = os.open(SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(secret)
     return secret
 
@@ -123,8 +167,48 @@ def _load_user(_header, payload):
     return user if user and user["active"] else None
 
 
+@jwt.token_in_blocklist_loader
+def _session_revoked(_header, payload):
+    """
+    Server-side revocation for otherwise stateless tokens. A token stops
+    working when it was signed out, when its account's token_version has
+    moved on (password reset, deactivation, phone recovery), or when the
+    original sign-in is older than MAX_SESSION_HOURS.
+    """
+    try:
+        user = db.get_user(int(payload["sub"]))
+    except (KeyError, TypeError, ValueError):
+        return True
+    if user is None or payload.get("ver") != user.get("token_version", 0):
+        return True
+    auth_time = payload.get("auth_time")
+    if not isinstance(auth_time, (int, float)):
+        return True
+    if _now() - datetime.fromtimestamp(auth_time, timezone.utc) > timedelta(hours=MAX_SESSION_HOURS):
+        return True
+    return db.is_token_revoked(payload.get("jti"))
+
+
 def _auth_error(message, status=401):
     return jsonify({"error": message, "code": "AUTH_REQUIRED"}), status
+
+
+@jwt.revoked_token_loader
+def _revoked_token(_header, _payload):
+    return _auth_error("Your session has ended. Please sign in again.")
+
+
+def _issue_token(user, auth_time=None):
+    claims = {
+        "ver": user.get("token_version", 0),
+        "auth_time": int(auth_time if auth_time is not None else _now().timestamp()),
+    }
+    return create_access_token(identity=str(user["id"]), additional_claims=claims)
+
+
+def end_other_sessions(user_id):
+    """Invalidate every token issued so far for this account."""
+    db.bump_token_version(user_id)
 
 
 @jwt.unauthorized_loader
@@ -154,12 +238,18 @@ def _refresh_expiring_token(response):
     header so the frontend can pick it up without reading cookies.
     """
     try:
-        exp = get_jwt()["exp"]
+        claims = get_jwt()
+        exp = claims["exp"]
     except (RuntimeError, KeyError):
         return response  # no authenticated request in this context
+    if response.status_code >= 400 or getattr(response, "nivara_session_closed", False):
+        return response
     remaining = datetime.fromtimestamp(exp, timezone.utc) - datetime.now(timezone.utc)
     if remaining < timedelta(minutes=REFRESH_WINDOW_MINUTES):
-        token = create_access_token(identity=get_jwt_identity())
+        user = db.get_user(int(get_jwt_identity()))
+        if user is None or not user["active"]:
+            return response
+        token = _issue_token(user, auth_time=claims.get("auth_time"))
         set_access_cookies(response, token)
         response.headers["X-CSRF-TOKEN"] = get_csrf_token(token)
     return response
@@ -198,7 +288,7 @@ def public_user(user):
 
 
 def _session_response(user, status=200):
-    token = create_access_token(identity=str(user["id"]))
+    token = _issue_token(user)
     db.touch_last_login(user["id"])
     response = jsonify({"user": public_user(user), "csrf_token": get_csrf_token(token)})
     set_access_cookies(response, token)
@@ -213,7 +303,7 @@ def _client_ip():
 
 
 def _normalise_email(value):
-    return (value or "").strip().lower()
+    return value.strip().lower() if isinstance(value, str) else ""
 
 
 def normalise_mobile(value):
@@ -222,7 +312,9 @@ def normalise_mobile(value):
     Accepts 9876543210, 09876543210, +91 98765 43210, 91-98765-43210 and
     similar.
     """
-    digits = re.sub(r"\D", "", value or "")
+    if not isinstance(value, str):
+        return None
+    digits = re.sub(r"\D", "", value)
     if len(digits) == 12 and digits.startswith("91"):
         digits = digits[2:]
     elif len(digits) == 11 and digits.startswith("0"):
@@ -237,6 +329,8 @@ def _parse_identifier(payload):
     Older clients send only {"email": ...}, which is treated as the email channel.
     """
     channel = payload.get("channel") or ("email" if "email" in payload else None)
+    if channel not in ("sms", "email"):
+        return None, None
     raw = payload.get("identifier") if "identifier" in payload else payload.get("email")
     if channel == "sms":
         return channel, normalise_mobile(raw)
@@ -253,9 +347,10 @@ def _parse_identifier(payload):
 @bp.route("/login", methods=["POST"])
 def login():
     """Staff sign-in. Accepts a username or an email address."""
-    payload = request.get_json(silent=True) or {}
+    payload = json_object()
     handle = _normalise_email(payload.get("username") or payload.get("email"))
-    password = payload.get("password") or ""
+    password = payload.get("password")
+    password = password if isinstance(password, str) else ""
     ip = _client_ip()
 
     if not handle or not password:
@@ -266,12 +361,16 @@ def login():
         return jsonify({"error": "Too many failed attempts. Try again in 15 minutes."}), 429
 
     user = db.get_user_by_login(name_or_email=handle)
+    stored_hash = user["password_hash"] if user and user["password_hash"] else _DUMMY_HASH
+    # Always run the hash check, so an unknown username takes as long as a
+    # wrong password and response timing does not reveal which accounts exist.
+    password_ok = check_password_hash(stored_hash, password)
     valid = (
         user is not None
         and user["role"] in STAFF_ROLES
         and user["active"]
-        and user["password_hash"]
-        and check_password_hash(user["password_hash"], password)
+        and bool(user["password_hash"])
+        and password_ok
     )
     if not valid:
         db.record_attempt("login_fail", handle)
@@ -287,14 +386,26 @@ def login():
 # Citizen sign-in (one-time code by email or SMS)
 # ---------------------------------------------------------------------------
 
-def _hash_code(identifier, code):
+def _hash_code(identifier, code, purpose=PURPOSE_SIGN_IN):
     key = current_app.config["JWT_SECRET_KEY"].encode()
-    return hmac.new(key, f"{identifier}:{code}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(key, f"{purpose}:{identifier}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+class DeliveryUnavailable(OSError):
+    """No real delivery channel is configured and console delivery is not allowed."""
 
 
 def _print_code(identifier, code, how):
     print(f"\n[NIVARA dev] Sign-in code for {identifier}: {code} "
           f"(valid {CODE_TTL_MINUTES} min; {how})\n", flush=True)
+
+
+def _console_delivery(identifier, code, how):
+    # Printing codes is for local development only. In production a missing
+    # SMTP or SMS configuration must fail closed, never leak codes into logs.
+    if is_production():
+        raise DeliveryUnavailable("No delivery channel configured for one-time codes.")
+    _print_code(identifier, code, how)
 
 
 def _send_email_code(email, code):
@@ -305,7 +416,7 @@ def _send_email_code(email, code):
     """
     host = os.environ.get("SMTP_HOST")
     if not host:
-        _print_code(email, code, "set SMTP_HOST to send real email")
+        _console_delivery(email, code, "set SMTP_HOST to send real email")
         return
 
     msg = EmailMessage()
@@ -335,7 +446,7 @@ def _send_sms_code(phone, code):
     TRAI's DLT platform, so console delivery is the default for the prototype.
     """
     if os.environ.get("SMS_PROVIDER", "console").lower() != "twilio":
-        _print_code(phone, code, "set SMS_PROVIDER=twilio to send real SMS")
+        _console_delivery(phone, code, "set SMS_PROVIDER=twilio to send real SMS")
         return
 
     sid = os.environ["TWILIO_ACCOUNT_SID"]
@@ -354,13 +465,14 @@ def _send_sms_code(phone, code):
         json.loads(res.read() or b"{}")
 
 
-def issue_code(identifier, channel, purpose="sign-in"):
+def issue_code(identifier, channel, purpose=PURPOSE_SIGN_IN):
     """
     Generate a one-time code, store its hash and send it. Shared by sign-in,
-    changing a mobile number, and signing a complaint digitally.
+    changing a mobile number, and signing a complaint digitally. A code only
+    works for the purpose it was issued for.
     """
     code = f"{secrets.randbelow(1_000_000):06d}"
-    db.store_login_code(identifier, channel, _hash_code(identifier, code), CODE_TTL_MINUTES)
+    db.store_login_code(identifier, channel, _hash_code(identifier, code, purpose), CODE_TTL_MINUTES, purpose)
     if channel == "sms":
         _send_sms_code(identifier, code)
     else:
@@ -368,20 +480,37 @@ def issue_code(identifier, channel, purpose="sign-in"):
     return code
 
 
-def check_code(identifier, channel, code):
+def too_many_wrong_codes(identifier):
+    return db.count_attempts("otp_fail", identifier, OTP_FAIL_WINDOW_SECONDS) >= OTP_FAIL_LIMIT
+
+
+def match_code(identifier, channel, code, purpose):
     """
-    Verify a one-time code and consume it. Returns True on success. Wrong
-    codes count against the attempt limit for that code.
+    The active code record if `code` is right for this address and purpose,
+    else None. A wrong guess counts against the code and against the address.
+    Does not consume the code.
     """
-    if not re.fullmatch(r"\d{6}", code or ""):
-        return False
-    record = db.get_active_login_code(identifier)
+    if not isinstance(code, str) or not re.fullmatch(r"\d{6}", code):
+        return None
+    if too_many_wrong_codes(identifier):
+        return None
+    record = db.get_active_login_code(identifier, purpose)
     if record is None or record["attempts"] >= CODE_MAX_ATTEMPTS or record["channel"] != channel:
-        return False
-    if not hmac.compare_digest(record["code_hash"], _hash_code(identifier, code)):
+        return None
+    if not hmac.compare_digest(record["code_hash"], _hash_code(identifier, code, purpose)):
         db.bump_code_attempts(record["id"])
+        db.record_attempt("otp_fail", identifier)
+        return None
+    return record
+
+
+def check_code(identifier, channel, code, purpose):
+    """Verify a one-time code and consume it. Returns True on success."""
+    record = match_code(identifier, channel, code, purpose)
+    if record is None:
         return False
     db.consume_login_code(record["id"])
+    db.clear_attempts("otp_fail", identifier)
     return True
 
 
@@ -414,7 +543,7 @@ def _find_citizen_login(channel, identifier):
 
 @bp.route("/otp/request", methods=["POST"])
 def request_code():
-    payload = request.get_json(silent=True) or {}
+    payload = json_object()
     channel, identifier = _parse_identifier(payload)
     ip = _client_ip()
 
@@ -447,21 +576,21 @@ def request_code():
 
 @bp.route("/otp/verify", methods=["POST"])
 def verify_code():
-    payload = request.get_json(silent=True) or {}
+    payload = json_object()
     channel, identifier = _parse_identifier(payload)
-    code = re.sub(r"\s", "", str(payload.get("code") or ""))
-    name = (payload.get("name") or "").strip()
-    contact = (payload.get("contact") or payload.get("phone") or "").strip()
+    code = re.sub(r"\s", "", text_field(payload, "code"))
+    name = text_field(payload, "name").strip()
+    contact = (text_field(payload, "contact") or text_field(payload, "phone")).strip()
 
     invalid = (jsonify({"error": "That code is incorrect or has expired."}), 400)
     if identifier is None or not re.fullmatch(r"\d{6}", code):
         return invalid
+    if too_many_wrong_codes(identifier):
+        return jsonify({"error": "Too many incorrect codes for this address. Try again in a few hours, "
+                                 "or visit your police station."}), 429
 
-    record = db.get_active_login_code(identifier)
-    if record is None or record["attempts"] >= CODE_MAX_ATTEMPTS or record["channel"] != channel:
-        return invalid
-    if not hmac.compare_digest(record["code_hash"], _hash_code(identifier, code)):
-        db.bump_code_attempts(record["id"])
+    record = match_code(identifier, channel, code, PURPOSE_SIGN_IN)
+    if record is None:
         return invalid
 
     user = _find_citizen_login(channel, identifier)
@@ -503,6 +632,7 @@ def verify_code():
         user = _find_citizen_login(channel, identifier)
 
     db.consume_login_code(record["id"])
+    db.clear_attempts("otp_fail", identifier)
     return _session_response(user)
 
 
@@ -521,7 +651,17 @@ def me():
 
 @bp.route("/logout", methods=["POST"])
 def logout():
+    # Revoke the presented token server-side, so a copied cookie stops working
+    # too. An absent, expired or already revoked token still signs out.
+    try:
+        verify_jwt_in_request(optional=True)
+        claims = get_jwt()
+    except Exception:
+        claims = {}
+    if claims.get("jti"):
+        db.revoke_token(claims["jti"], claims.get("exp"))
     response = jsonify({"message": "Signed out."})
+    response.nivara_session_closed = True
     unset_jwt_cookies(response)
     return response, 200
 
@@ -538,40 +678,55 @@ def logout():
 @bp.route("/phone/change/request", methods=["POST"])
 @role_required("citizen")
 def request_phone_change():
-    payload = request.get_json(silent=True) or {}
+    payload = json_object()
     new_phone = normalise_mobile(payload.get("phone"))
     if new_phone is None:
         return jsonify({"error": "Enter a valid 10-digit Indian mobile number."}), 400
     if new_phone == current_user.get("phone"):
         return jsonify({"error": "That is already the number on your account."}), 400
-    if db.get_user_by_login(phone=new_phone):
-        return jsonify({"error": "That number is already registered to another account."}), 409
 
+    # Throttle before looking the number up, and answer the same way whether
+    # or not it belongs to someone else: otherwise any signed-in citizen could
+    # test which numbers have filed complaints with the police.
     limited = throttled(new_phone, _client_ip(), kind="phone_change")
     if limited:
         return limited
-    try:
-        issue_code(new_phone, "sms", purpose="number change")
-    except (OSError, urllib.error.URLError, KeyError, ValueError):
-        current_app.logger.exception("Could not send number-change code")
-        return jsonify({"error": "We could not send the code. Please try again."}), 502
-    return jsonify({"message": "We sent a code to the new number.", "phone": new_phone}), 200
+    if db.get_user_by_login(phone=new_phone) is None:
+        try:
+            issue_code(new_phone, "sms", purpose=PURPOSE_NUMBER_CHANGE)
+        except (OSError, urllib.error.URLError, KeyError, ValueError):
+            current_app.logger.exception("Could not send number-change code")
+            return jsonify({"error": "We could not send the code. Please try again."}), 502
+    return jsonify({
+        "message": "If this number can be added to your account, we sent a code to it.",
+        "phone": new_phone,
+    }), 200
 
 
 @bp.route("/phone/change/verify", methods=["POST"])
 @role_required("citizen")
 def verify_phone_change():
-    payload = request.get_json(silent=True) or {}
+    payload = json_object()
     new_phone = normalise_mobile(payload.get("phone"))
-    code = re.sub(r"\s", "", str(payload.get("code") or ""))
-    if new_phone is None or not check_code(new_phone, "sms", code):
-        return jsonify({"error": "That code is incorrect or has expired."}), 400
+    code = re.sub(r"\s", "", text_field(payload, "code"))
+    invalid = (jsonify({"error": "That code is incorrect or has expired."}), 400)
+    if new_phone is None or not check_code(new_phone, "sms", code, PURPOSE_NUMBER_CHANGE):
+        return invalid
     try:
         old = db.change_phone(current_user["id"], new_phone, current_user["id"], "Changed by the citizen")
     except sqlite3.IntegrityError:
-        return jsonify({"error": "That number is already registered to another account."}), 409
-    return jsonify({
-        "user": public_user(db.get_user(current_user["id"])),
+        return invalid
+    # Sign out every other session on the account; this one gets a new token.
+    end_other_sessions(current_user["id"])
+    user = db.get_user(current_user["id"])
+    token = _issue_token(user)
+    response = jsonify({
+        "user": public_user(user),
         "previous_phone": old,
+        "csrf_token": get_csrf_token(token),
         "message": "Your number has been updated. Your complaints stay on this account.",
-    }), 200
+    })
+    response.nivara_session_closed = True
+    set_access_cookies(response, token)
+    response.headers["X-CSRF-TOKEN"] = get_csrf_token(token)
+    return response, 200

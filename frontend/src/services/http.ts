@@ -8,11 +8,18 @@
  * whenever the backend sends a new one.
  */
 
-export const API_BASE_URL = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").replace(/\/+$/, "");
+const RAW_API_BASE_URL = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "").trim();
+
+/**
+ * "/" means the API is served from the same origin as the page (for example
+ * through the Vite proxy in Codespaces, or a reverse proxy in deployment), so
+ * requests use relative /api paths.
+ */
+export const API_BASE_URL = RAW_API_BASE_URL === "/" ? "" : RAW_API_BASE_URL.replace(/\/+$/, "");
 
 /** True when no backend is configured: the app runs on local demo data. */
 export function isDemoMode(): boolean {
-  return !API_BASE_URL;
+  return RAW_API_BASE_URL === "";
 }
 
 /** Raised when the session is missing or expired. The app returns to sign-in. */
