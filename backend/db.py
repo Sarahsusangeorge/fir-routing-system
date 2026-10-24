@@ -221,13 +221,24 @@ def get_routing_rules(codes):
 
 
 def list_units(default_unit):
-    """Every unit a complaint can be routed to."""
+    """
+    Every unit a complaint can be routed to.
+
+    Three sources are unioned: the units registry, the units named by routing
+    rules, and the units officers are posted to. The last two matter because
+    databases seeded before the registry existed carry unit names only in
+    those tables, and a unit that is in use must never disappear from the list
+    just because nobody registered it.
+    """
     conn = get_connection()
-    rows = conn.execute("SELECT DISTINCT unit FROM routing_rules ORDER BY unit").fetchall()
+    rows = conn.execute(
+        "SELECT name AS unit FROM units "
+        "UNION SELECT DISTINCT unit FROM routing_rules WHERE unit IS NOT NULL "
+        "UNION SELECT DISTINCT unit FROM users WHERE unit IS NOT NULL"
+    ).fetchall()
     conn.close()
-    units = [r["unit"] for r in rows]
-    if default_unit not in units:
-        units.append(default_unit)
+    units = {r["unit"] for r in rows if r["unit"]}
+    units.add(default_unit)
     return sorted(units)
 
 
@@ -1118,3 +1129,179 @@ def list_policy_changes(limit=100):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Stations and units (administration)
+# ---------------------------------------------------------------------------
+#
+# Both are reference data that officer allocation depends on: a case is kept at
+# the station it was filed at, and eligibility is decided by unit. Neither is
+# protected by a foreign key -- users.station, complaints.station and
+# users.unit are plain text -- so anything that removes or renames one has to
+# check what points at it first.
+
+def stations_in_use():
+    """{station_code: {"officers": n, "complaints": n}} for every referenced code."""
+    conn = get_connection()
+    officers = conn.execute(
+        "SELECT station, COUNT(*) AS n FROM users WHERE station IS NOT NULL GROUP BY station"
+    ).fetchall()
+    complaints = conn.execute(
+        "SELECT station, COUNT(*) AS n FROM complaints WHERE station IS NOT NULL GROUP BY station"
+    ).fetchall()
+    conn.close()
+    usage = {}
+    for row in officers:
+        usage.setdefault(row["station"], {"officers": 0, "complaints": 0})["officers"] = row["n"]
+    for row in complaints:
+        usage.setdefault(row["station"], {"officers": 0, "complaints": 0})["complaints"] = row["n"]
+    return usage
+
+
+def get_station(code):
+    conn = get_connection()
+    row = conn.execute("SELECT code, name, district FROM stations WHERE code = ?", (code,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_station(code, name, district, actor_id):
+    conn = get_connection()
+    try:
+        conn.execute("INSERT INTO stations (code, name, district) VALUES (?, ?, ?)",
+                     (code, name, district))
+        _log_policy(conn, actor_id, "station", code, "created", None, f"{name} ({district or 'no district'})")
+        conn.commit()
+    finally:
+        conn.close()
+    return get_station(code)
+
+
+def update_station(code, fields, actor_id):
+    allowed = {"name", "district"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if not fields:
+        return get_station(code)
+    conn = get_connection()
+    try:
+        before = conn.execute("SELECT * FROM stations WHERE code = ?", (code,)).fetchone()
+        if before is None:
+            return None
+        assignments = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(f"UPDATE stations SET {assignments} WHERE code = ?",
+                     list(fields.values()) + [code])
+        for key, value in fields.items():
+            if before[key] != value:
+                _log_policy(conn, actor_id, "station", code, key, before[key], value)
+        conn.commit()
+    finally:
+        conn.close()
+    return get_station(code)
+
+
+def delete_station(code, actor_id):
+    conn = get_connection()
+    try:
+        before = conn.execute("SELECT * FROM stations WHERE code = ?", (code,)).fetchone()
+        if before is None:
+            return False
+        conn.execute("DELETE FROM stations WHERE code = ?", (code,))
+        _log_policy(conn, actor_id, "station", code, "deleted", before["name"], None)
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
+def units_in_use():
+    """{unit: {"officers": n, "rules": n}} across both tables that name a unit."""
+    conn = get_connection()
+    officers = conn.execute(
+        "SELECT unit, COUNT(*) AS n FROM users WHERE unit IS NOT NULL GROUP BY unit"
+    ).fetchall()
+    rules = conn.execute(
+        "SELECT unit, COUNT(*) AS n FROM routing_rules GROUP BY unit"
+    ).fetchall()
+    conn.close()
+    usage = {}
+    for row in officers:
+        usage.setdefault(row["unit"], {"officers": 0, "rules": 0})["officers"] = row["n"]
+    for row in rules:
+        usage.setdefault(row["unit"], {"officers": 0, "rules": 0})["rules"] = row["n"]
+    return usage
+
+
+def list_registered_units():
+    conn = get_connection()
+    rows = conn.execute("SELECT name, description FROM units ORDER BY name").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def unit_is_registered(name):
+    conn = get_connection()
+    row = conn.execute("SELECT 1 FROM units WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_unit(name, description, actor_id):
+    conn = get_connection()
+    try:
+        conn.execute("INSERT INTO units (name, description) VALUES (?, ?)", (name, description))
+        _log_policy(conn, actor_id, "unit", name, "created", None, name)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"name": name, "description": description}
+
+
+UNSET = object()   # distinguishes "leave the description alone" from "clear it"
+
+
+def rename_unit(old_name, new_name, description, actor_id):
+    """
+    Rename a unit and carry every reference with it.
+
+    routing_rules.unit and users.unit hold the name as text, so a rename that
+    touched only the registry would silently orphan both: rules would route to
+    a unit that no longer exists and officers would belong to nothing. All
+    three move together or none do.
+    """
+    conn = get_connection()
+    try:
+        before = conn.execute("SELECT * FROM units WHERE name = ?", (old_name,)).fetchone()
+        if before is None:
+            return None
+        if new_name != old_name:
+            conn.execute("UPDATE units SET name = ? WHERE name = ?", (new_name, old_name))
+            rules = conn.execute("UPDATE routing_rules SET unit = ? WHERE unit = ?",
+                                 (new_name, old_name)).rowcount
+            officers = conn.execute("UPDATE users SET unit = ? WHERE unit = ?",
+                                    (new_name, old_name)).rowcount
+            _log_policy(conn, actor_id, "unit", new_name, "renamed", old_name,
+                        f"{new_name} ({rules} rule(s), {officers} officer(s) moved)")
+        if description is not UNSET and description != before["description"]:
+            conn.execute("UPDATE units SET description = ? WHERE name = ?", (description, new_name))
+            _log_policy(conn, actor_id, "unit", new_name, "description",
+                        before["description"], description)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"name": new_name,
+            "description": before["description"] if description is UNSET else description}
+
+
+def delete_unit(name, actor_id):
+    conn = get_connection()
+    try:
+        before = conn.execute("SELECT * FROM units WHERE name = ?", (name,)).fetchone()
+        if before is None:
+            return False
+        conn.execute("DELETE FROM units WHERE name = ?", (name,))
+        _log_policy(conn, actor_id, "unit", name, "deleted", name, None)
+        conn.commit()
+    finally:
+        conn.close()
+    return True

@@ -5,15 +5,30 @@ import ErrorState from "../components/ErrorState";
 import SectionLabel from "../components/SectionLabel";
 import {
   createRoutingRule,
+  createStation,
+  createUnit,
   deleteRoutingRule,
+  deleteStation,
+  deleteUnit,
+  fetchAdminStations,
+  fetchAdminUnits,
   fetchPolicyChanges,
   fetchRoutingPolicy,
   fetchSections,
   toIsoUtc,
   updateRoutingRule,
   updateSection,
+  updateStation,
+  updateUnit,
 } from "../services/api";
-import type { IpcSection, PolicyChange, RoutingPolicy, RoutingRule } from "../types";
+import type {
+  AdminStation,
+  AdminUnit,
+  IpcSection,
+  PolicyChange,
+  RoutingPolicy,
+  RoutingRule,
+} from "../types";
 import { formatDateTime } from "../utils/format";
 
 const fieldClass =
@@ -422,6 +437,443 @@ function RoutingTable({
   );
 }
 
+
+/**
+ * Police stations. A case is kept at the station it was filed at, so the list
+ * here is what the allocation rule can match against. Station codes are
+ * stored verbatim on officers and complaints and are therefore not editable;
+ * the counts say what would be orphaned if a station were removed.
+ */
+function StationsTable({ onReload, onNotice }: { onReload: () => void; onNotice: (m: string) => void }) {
+  const ids = { code: useId(), name: useId(), district: useId() };
+  const [stations, setStations] = useState<AdminStation[] | null>(null);
+  const [draft, setDraft] = useState({ code: "", name: "", district: "" });
+  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    fetchAdminStations()
+      .then(setStations)
+      .catch(() => setError("Stations could not be loaded."));
+  };
+  useEffect(load, []);
+
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createStation({
+        code: draft.code.trim(),
+        name: draft.name.trim(),
+        district: draft.district.trim() || null,
+      });
+      setDraft({ code: "", name: "", district: "" });
+      onNotice(`${created.name} added as ${created.code}. Officers can now be posted to it.`);
+      load();
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The station could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rename = async (station: AdminStation, name: string, district: string) => {
+    if (name === (station.name ?? "") && district === (station.district ?? "")) return;
+    setPending(station.code);
+    setError(null);
+    try {
+      await updateStation(station.code, { name, district: district || null });
+      onNotice(`${station.code} updated.`);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The station could not be updated.");
+      load();
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const remove = async (station: AdminStation) => {
+    if (!window.confirm(`Remove ${station.name ?? station.code}?`)) return;
+    setPending(station.code);
+    setError(null);
+    try {
+      await deleteStation(station.code);
+      onNotice(`${station.name ?? station.code} removed.`);
+      load();
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The station could not be removed.");
+    } finally {
+      setPending(null);
+    }
+  };
+
+  if (!stations) {
+    return (
+      <div className="flex justify-center py-10">
+        <Loader2 className="w-5 h-5 animate-spin text-mercury" strokeWidth={1.75} />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <p className="text-sm text-mercury mb-6 max-w-2xl">
+        A complaint is kept at the station it was filed at, which is the largest single effect in the
+        allocation study. A station code is stored on every officer and complaint that names it, so the code
+        cannot be changed; a station still in use cannot be removed.
+      </p>
+
+      {error && (
+        <p role="alert" className="text-sm text-[color:var(--color-priority-high)] mb-4">
+          {error}
+        </p>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse min-w-[680px]">
+          <thead>
+            <tr className="border-b border-line text-sm text-mercury">
+              <th className="py-3 pr-4 font-normal">Code</th>
+              <th className="py-3 pr-4 font-normal">Name</th>
+              <th className="py-3 pr-4 font-normal">District</th>
+              <th className="py-3 pr-4 font-normal">In use by</th>
+              <th className="py-3 font-normal text-right">&nbsp;</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stations.map((station) => (
+              <tr key={station.code} className="border-b border-line last:border-0">
+                <td className="py-3 pr-4 text-sm text-carbon">
+                  {station.code}
+                  {station.unregistered && (
+                    <span className="block text-xs text-[color:var(--color-priority-high)]">
+                      referenced but not registered
+                    </span>
+                  )}
+                </td>
+                <td className="py-3 pr-4">
+                  <label className="sr-only" htmlFor={`st-name-${station.code}`}>
+                    Name of station {station.code}
+                  </label>
+                  <input
+                    id={`st-name-${station.code}`}
+                    defaultValue={station.name ?? ""}
+                    disabled={pending === station.code || station.unregistered}
+                    onBlur={(e) => rename(station, e.target.value.trim(), station.district ?? "")}
+                    className={`${fieldClass} sm:w-56`}
+                  />
+                </td>
+                <td className="py-3 pr-4">
+                  <label className="sr-only" htmlFor={`st-dist-${station.code}`}>
+                    District of station {station.code}
+                  </label>
+                  <input
+                    id={`st-dist-${station.code}`}
+                    defaultValue={station.district ?? ""}
+                    disabled={pending === station.code || station.unregistered}
+                    onBlur={(e) => rename(station, station.name ?? "", e.target.value.trim())}
+                    className={`${fieldClass} sm:w-40`}
+                  />
+                </td>
+                <td className="py-3 pr-4 text-sm text-carbon tabular-nums whitespace-nowrap">
+                  {station.officers} officer{station.officers === 1 ? "" : "s"}
+                  <span className="block text-xs text-mercury">
+                    {station.complaints} complaint{station.complaints === 1 ? "" : "s"}
+                  </span>
+                </td>
+                <td className="py-3 text-right">
+                  <button
+                    onClick={() => remove(station)}
+                    disabled={
+                      pending === station.code ||
+                      station.unregistered ||
+                      station.officers > 0 ||
+                      station.complaints > 0
+                    }
+                    title={
+                      station.officers > 0 || station.complaints > 0
+                        ? "Move the officers and complaints that name this station first."
+                        : undefined
+                    }
+                    aria-label={`Remove station ${station.name ?? station.code}`}
+                    className="inline-flex items-center px-3 py-2 rounded-full border border-line text-sm text-carbon hover:bg-vellum transition-colors disabled:opacity-30"
+                  >
+                    {pending === station.code ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.75} />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    )}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <form onSubmit={add} className="grid sm:grid-cols-4 gap-4 items-end mt-8 pt-6 border-t border-line" noValidate>
+        <div>
+          <label htmlFor={ids.code} className="block text-sm font-medium text-carbon mb-2">
+            Code
+          </label>
+          <input
+            id={ids.code}
+            value={draft.code}
+            onChange={(e) => setDraft((d) => ({ ...d, code: e.target.value }))}
+            placeholder="PS-WEST"
+            className={fieldClass}
+          />
+        </div>
+        <div>
+          <label htmlFor={ids.name} className="block text-sm font-medium text-carbon mb-2">
+            Name
+          </label>
+          <input
+            id={ids.name}
+            value={draft.name}
+            onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+            className={fieldClass}
+          />
+        </div>
+        <div>
+          <label htmlFor={ids.district} className="block text-sm font-medium text-carbon mb-2">
+            District
+          </label>
+          <input
+            id={ids.district}
+            value={draft.district}
+            onChange={(e) => setDraft((d) => ({ ...d, district: e.target.value }))}
+            className={fieldClass}
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={busy || !draft.code.trim() || !draft.name.trim()}
+          className="inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-full bg-carbon text-vellum text-sm font-medium hover:bg-onyx transition-colors disabled:opacity-40"
+        >
+          {busy && <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.75} />}
+          Add station
+        </button>
+      </form>
+    </>
+  );
+}
+
+/**
+ * Police units. Eligibility for a case is decided by unit, and until now a
+ * unit existed only because a routing rule or an officer happened to name it.
+ * Registering one here lets it be created before any work is assigned, and
+ * renaming carries the rules and officers that name it along with it.
+ */
+function UnitsTable({ onReload, onNotice }: { onReload: () => void; onNotice: (m: string) => void }) {
+  const ids = { name: useId(), description: useId() };
+  const [units, setUnits] = useState<AdminUnit[] | null>(null);
+  const [draft, setDraft] = useState({ name: "", description: "" });
+  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    fetchAdminUnits()
+      .then(setUnits)
+      .catch(() => setError("Units could not be loaded."));
+  };
+  useEffect(load, []);
+
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createUnit({
+        name: draft.name.trim(),
+        description: draft.description.trim() || null,
+      });
+      setDraft({ name: "", description: "" });
+      onNotice(`${created.name} registered. Officers can be posted to it and rules can route to it.`);
+      load();
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The unit could not be added.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rename = async (unit: AdminUnit, name: string) => {
+    if (!name || name === unit.name) return;
+    setPending(unit.name);
+    setError(null);
+    try {
+      const result = await updateUnit(unit.name, { name });
+      const moved = result.officers_moved + result.rules_moved;
+      onNotice(
+        moved
+          ? `Renamed to ${result.unit.name}; ${result.officers_moved} officer(s) and ${result.rules_moved} routing rule(s) moved with it.`
+          : `Renamed to ${result.unit.name}.`
+      );
+      load();
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The unit could not be renamed.");
+      load();
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const remove = async (unit: AdminUnit) => {
+    if (!window.confirm(`Remove ${unit.name}?`)) return;
+    setPending(unit.name);
+    setError(null);
+    try {
+      await deleteUnit(unit.name);
+      onNotice(`${unit.name} removed.`);
+      load();
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The unit could not be removed.");
+    } finally {
+      setPending(null);
+    }
+  };
+
+  if (!units) {
+    return (
+      <div className="flex justify-center py-10">
+        <Loader2 className="w-5 h-5 animate-spin text-mercury" strokeWidth={1.75} />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <p className="text-sm text-mercury mb-6 max-w-2xl">
+        A case is offered first to officers of its unit, and only to general-duty officers if none are
+        available. A unit already named by a routing rule or an officer is listed here even if it was never
+        registered; register it to rename it or give it a description. Renaming carries every rule and officer
+        that names it.
+      </p>
+
+      {error && (
+        <p role="alert" className="text-sm text-[color:var(--color-priority-high)] mb-4">
+          {error}
+        </p>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse min-w-[680px]">
+          <thead>
+            <tr className="border-b border-line text-sm text-mercury">
+              <th className="py-3 pr-4 font-normal">Unit</th>
+              <th className="py-3 pr-4 font-normal">Description</th>
+              <th className="py-3 pr-4 font-normal">In use by</th>
+              <th className="py-3 font-normal text-right">&nbsp;</th>
+            </tr>
+          </thead>
+          <tbody>
+            {units.map((unit) => (
+              <tr key={unit.name} className="border-b border-line last:border-0">
+                <td className="py-3 pr-4">
+                  <label className="sr-only" htmlFor={`un-name-${unit.name}`}>
+                    Name of unit {unit.name}
+                  </label>
+                  <input
+                    id={`un-name-${unit.name}`}
+                    defaultValue={unit.name}
+                    disabled={pending === unit.name || !unit.registered}
+                    onBlur={(e) => rename(unit, e.target.value.trim())}
+                    className={`${fieldClass} sm:w-60`}
+                  />
+                  {unit.is_default && <span className="block text-xs text-mercury mt-1">Fallback unit</span>}
+                  {!unit.registered && (
+                    <span className="block text-xs text-mercury mt-1">In use, not registered</span>
+                  )}
+                </td>
+                <td className="py-3 pr-4 text-sm text-carbon">
+                  {unit.description ?? <span className="text-mercury">—</span>}
+                </td>
+                <td className="py-3 pr-4 text-sm text-carbon tabular-nums whitespace-nowrap">
+                  {unit.officers} officer{unit.officers === 1 ? "" : "s"}
+                  <span className="block text-xs text-mercury">
+                    {unit.rules} rule{unit.rules === 1 ? "" : "s"}
+                  </span>
+                </td>
+                <td className="py-3 text-right">
+                  <button
+                    onClick={() => remove(unit)}
+                    disabled={
+                      pending === unit.name ||
+                      !unit.registered ||
+                      unit.is_default ||
+                      unit.officers > 0 ||
+                      unit.rules > 0
+                    }
+                    title={
+                      unit.officers > 0 || unit.rules > 0
+                        ? "Reassign the officers and routing rules that name this unit first."
+                        : unit.is_default
+                          ? "Every unmatched complaint routes here."
+                          : undefined
+                    }
+                    aria-label={`Remove unit ${unit.name}`}
+                    className="inline-flex items-center px-3 py-2 rounded-full border border-line text-sm text-carbon hover:bg-vellum transition-colors disabled:opacity-30"
+                  >
+                    {pending === unit.name ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.75} />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    )}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <form onSubmit={add} className="grid sm:grid-cols-3 gap-4 items-end mt-8 pt-6 border-t border-line" noValidate>
+        <div>
+          <label htmlFor={ids.name} className="block text-sm font-medium text-carbon mb-2">
+            Unit name
+          </label>
+          <input
+            id={ids.name}
+            value={draft.name}
+            onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+            placeholder="Narcotics Cell"
+            className={fieldClass}
+          />
+        </div>
+        <div>
+          <label htmlFor={ids.description} className="block text-sm font-medium text-carbon mb-2">
+            Description <span className="text-mercury font-normal">(optional)</span>
+          </label>
+          <input
+            id={ids.description}
+            value={draft.description}
+            onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+            className={fieldClass}
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={busy || !draft.name.trim()}
+          className="inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-full bg-carbon text-vellum text-sm font-medium hover:bg-onyx transition-colors disabled:opacity-40"
+        >
+          {busy && <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.75} />}
+          Add unit
+        </button>
+      </form>
+    </>
+  );
+}
+
 function ChangeLog({ changes }: { changes: PolicyChange[] }) {
   if (changes.length === 0) {
     return <p className="text-sm text-mercury">No policy change has been recorded yet.</p>;
@@ -452,7 +904,7 @@ export default function PolicyPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [tab, setTab] = useState<"severity" | "routing">("severity");
+  const [tab, setTab] = useState<"severity" | "routing" | "stations" | "units">("severity");
 
   const load = () => {
     setLoading(true);
@@ -517,6 +969,8 @@ export default function PolicyPage() {
               [
                 ["severity", "Severity weights"],
                 ["routing", "Routing rules"],
+                ["units", "Units"],
+                ["stations", "Stations"],
               ] as const
             ).map(([value, label]) => (
               <button
@@ -541,7 +995,7 @@ export default function PolicyPage() {
             aria-labelledby={`tab-${tab}`}
             className="bg-paper border border-line rounded-[24px] p-6 md:p-8 mt-6"
           >
-            {tab === "severity" ? (
+            {tab === "severity" && (
               <SeverityTable
                 sections={sections}
                 onChanged={(updated, message) => {
@@ -550,7 +1004,8 @@ export default function PolicyPage() {
                   refresh();
                 }}
               />
-            ) : (
+            )}
+            {tab === "routing" && (
               <RoutingTable
                 policy={policy}
                 sections={sections}
@@ -558,6 +1013,8 @@ export default function PolicyPage() {
                 onNotice={(message) => setNotice(message)}
               />
             )}
+            {tab === "units" && <UnitsTable onReload={refresh} onNotice={setNotice} />}
+            {tab === "stations" && <StationsTable onReload={refresh} onNotice={setNotice} />}
           </div>
 
           <div className="bg-paper border border-line rounded-[24px] p-6 md:p-8 mt-6">

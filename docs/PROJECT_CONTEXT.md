@@ -91,8 +91,8 @@ Production mode refuses to start while demo passwords are active.
 **Tests**
 
 ```bash
-cd backend && pytest                 # 236 passed, 1 xfailed (verified 25 Oct 2026)
-cd frontend && npx vitest run        # 27 passed (verified 25 Oct 2026)
+cd backend && pytest                 # 257 passed, 1 xfailed (verified 25 Oct 2026)
+cd frontend && npx vitest run        # 32 passed (verified 25 Oct 2026)
 python experiments/allocation_sim.py --runs 30
 ```
 
@@ -142,13 +142,18 @@ limitation of the keyword baseline.
   font are served from the application's own origin.
 - CI runs both suites, the type-check, the lint, the production build and a
   blocking check for high-severity Bandit findings on every push.
-- Tests: 236 backend + 27 frontend, with audit evidence.
+- Station and unit administration, with reference checks: neither can be
+  removed while officers, complaints or routing rules still name it, and
+  renaming a unit carries its rules and officers with it.
+- Tests: 257 backend + 32 frontend, with audit evidence.
 
 **Open work — development**
 
 - **Model weights are missing** (Track A); the keyword baseline is what runs.
-- Admin screens for units and stations are still missing; both remain seed
-  data. Notifications and attachments are also unbuilt.
+- Notifications and attachments are unbuilt. Both are larger than the rest of
+  this list: notifications need a delivery channel and citizen preferences,
+  and attachments in a police system are evidence, needing storage, type and
+  size limits, and access rules that follow restricted-case redaction.
 - Pre-existing lint debt: `ruff check backend` reports about 59 findings and
   Bandit reports 19 medium ones, all inherited and all accepted by the
   October audit (0 high severity). CI reports them without failing the build;

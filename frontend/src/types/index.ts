@@ -227,11 +227,32 @@ export interface RoutingPolicy {
   officers_by_unit: Record<string, number>;
 }
 
+/** A station as administration sees it, with what depends on it. */
+export interface AdminStation {
+  code: string;
+  name: string | null;
+  district: string | null;
+  officers: number;
+  complaints: number;
+  /** True when officers or complaints still name a code that no station row holds. */
+  unregistered?: boolean;
+}
+
+export interface AdminUnit {
+  name: string;
+  description: string | null;
+  /** False for a unit that exists only because a rule or an officer names it. */
+  registered: boolean;
+  is_default: boolean;
+  officers: number;
+  rules: number;
+}
+
 export interface PolicyChange {
   id: number;
   actor_id: number | null;
   actor_name: string | null;
-  entity: "ipc_section" | "routing_rule";
+  entity: "ipc_section" | "routing_rule" | "station" | "unit";
   record_key: string;
   field: string;
   old_value: string | null;

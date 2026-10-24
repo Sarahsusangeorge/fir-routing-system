@@ -350,3 +350,185 @@ def delete_routing_rule(rule_id):
 @role_required("admin")
 def policy_changes():
     return jsonify({"changes": db.list_policy_changes(limit=200)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Stations and units (FR9, reference data)
+# ---------------------------------------------------------------------------
+#
+# Allocation keeps a case at the station it was filed at and decides
+# eligibility by unit, so both are part of how the system decides and both
+# belong in the policy change log. Neither is protected by a foreign key, so
+# removing or renaming one has to account for what already points at it.
+
+STATION_CODE_RE = re.compile(r"[A-Z0-9][A-Z0-9-]{1,31}")
+
+
+@bp.route("/stations", methods=["GET"])
+@role_required("admin")
+def list_stations_admin():
+    usage = db.stations_in_use()
+    stations = [
+        {**s, **usage.get(s["code"], {"officers": 0, "complaints": 0})}
+        for s in db.list_stations()
+    ]
+    # A station that officers or complaints still name but that was never
+    # registered would otherwise be invisible here while remaining in use.
+    known = {s["code"] for s in stations}
+    orphans = [
+        {"code": code, "name": None, "district": None, "unregistered": True, **counts}
+        for code, counts in sorted(usage.items())
+        if code not in known
+    ]
+    return jsonify({"stations": stations + orphans}), 200
+
+
+@bp.route("/stations", methods=["POST"])
+@role_required("admin")
+def create_station():
+    payload = json_object()
+    code = text_field(payload, "code").strip().upper()
+    name = text_field(payload, "name").strip()
+    district = text_field(payload, "district").strip() or None
+
+    if not STATION_CODE_RE.fullmatch(code):
+        return jsonify({"error": "Station code must be 2-32 characters: capitals, digits or dashes."}), 400
+    if not 2 <= len(name) <= 120:
+        return jsonify({"error": "Enter the station's name."}), 400
+    if db.get_station(code):
+        return jsonify({"error": "A station with that code already exists."}), 409
+
+    station = db.create_station(code, name, district, actor_id=current_user["id"])
+    return jsonify({"station": {**station, "officers": 0, "complaints": 0}}), 201
+
+
+@bp.route("/stations/<code>", methods=["PATCH"])
+@role_required("admin")
+def update_station(code):
+    if db.get_station(code) is None:
+        return jsonify({"error": "Station not found."}), 404
+
+    payload = json_object()
+    changes = {}
+    if "name" in payload:
+        name = text_field(payload, "name").strip()
+        if not 2 <= len(name) <= 120:
+            return jsonify({"error": "Enter the station's name."}), 400
+        changes["name"] = name
+    if "district" in payload:
+        changes["district"] = text_field(payload, "district").strip() or None
+    if not changes:
+        return jsonify({"error": "Nothing to update."}), 400
+
+    # The code is the identifier officers and complaints store, so it is not
+    # editable: changing it would orphan every record that holds it.
+    updated = db.update_station(code, changes, actor_id=current_user["id"])
+    usage = db.stations_in_use().get(code, {"officers": 0, "complaints": 0})
+    return jsonify({"station": {**updated, **usage}}), 200
+
+
+@bp.route("/stations/<code>", methods=["DELETE"])
+@role_required("admin")
+def delete_station(code):
+    station = db.get_station(code)
+    if station is None:
+        return jsonify({"error": "Station not found."}), 404
+
+    usage = db.stations_in_use().get(code, {"officers": 0, "complaints": 0})
+    if usage["officers"] or usage["complaints"]:
+        return jsonify({
+            "error": f"{station['name']} is still in use by {usage['officers']} officer(s) and "
+                     f"{usage['complaints']} complaint(s). Move them first.",
+            "officers": usage["officers"],
+            "complaints": usage["complaints"],
+        }), 409
+
+    db.delete_station(code, actor_id=current_user["id"])
+    return jsonify({"deleted": code}), 200
+
+
+@bp.route("/units", methods=["GET"])
+@role_required("admin")
+def list_units_admin():
+    usage = db.units_in_use()
+    registered = {u["name"]: u for u in db.list_registered_units()}
+    units = []
+    for name in db.list_units(routing_engine.DEFAULT_UNIT):
+        counts = usage.get(name, {"officers": 0, "rules": 0})
+        units.append({
+            "name": name,
+            "description": registered.get(name, {}).get("description"),
+            "registered": name in registered,
+            "is_default": name == routing_engine.DEFAULT_UNIT,
+            **counts,
+        })
+    return jsonify({"units": units, "default_unit": routing_engine.DEFAULT_UNIT}), 200
+
+
+@bp.route("/units", methods=["POST"])
+@role_required("admin")
+def create_unit():
+    payload = json_object()
+    name = text_field(payload, "name").strip()
+    description = text_field(payload, "description").strip() or None
+
+    if not 2 <= len(name) <= 80:
+        return jsonify({"error": "Enter the unit's name."}), 400
+    if db.unit_is_registered(name):
+        return jsonify({"error": "That unit already exists."}), 409
+
+    unit = db.create_unit(name, description, actor_id=current_user["id"])
+    return jsonify({"unit": {**unit, "registered": True, "officers": 0, "rules": 0,
+                             "is_default": name == routing_engine.DEFAULT_UNIT}}), 201
+
+
+@bp.route("/units/<name>", methods=["PATCH"])
+@role_required("admin")
+def update_unit(name):
+    if not db.unit_is_registered(name):
+        return jsonify({"error": "Unit not found. Units already in use but never "
+                                 "registered must be created here first."}), 404
+
+    payload = json_object()
+    new_name = text_field(payload, "name").strip() if "name" in payload else name
+    description = (text_field(payload, "description").strip() or None
+                   if "description" in payload else db.UNSET)
+
+    if not 2 <= len(new_name) <= 80:
+        return jsonify({"error": "Enter the unit's name."}), 400
+    if new_name != name and db.unit_is_registered(new_name):
+        return jsonify({"error": "Another unit already has that name."}), 409
+    if new_name == name and description is db.UNSET:
+        return jsonify({"error": "Nothing to update."}), 400
+
+    moved = db.units_in_use().get(name, {"officers": 0, "rules": 0})
+    unit = db.rename_unit(name, new_name, description, actor_id=current_user["id"])
+    return jsonify({
+        "unit": {**unit, "registered": True,
+                 "is_default": new_name == routing_engine.DEFAULT_UNIT,
+                 **db.units_in_use().get(new_name, {"officers": 0, "rules": 0})},
+        "officers_moved": moved["officers"] if new_name != name else 0,
+        "rules_moved": moved["rules"] if new_name != name else 0,
+    }), 200
+
+
+@bp.route("/units/<name>", methods=["DELETE"])
+@role_required("admin")
+def delete_unit(name):
+    if not db.unit_is_registered(name):
+        return jsonify({"error": "Unit not found."}), 404
+    if name == routing_engine.DEFAULT_UNIT:
+        return jsonify({"error": f"{name} is the fallback every unmatched complaint "
+                                 f"routes to and cannot be removed."}), 400
+
+    usage = db.units_in_use().get(name, {"officers": 0, "rules": 0})
+    if usage["officers"] or usage["rules"]:
+        return jsonify({
+            "error": f"{name} is still used by {usage['officers']} officer(s) and "
+                     f"{usage['rules']} routing rule(s). Reassign them first.",
+            "officers": usage["officers"],
+            "rules": usage["rules"],
+        }), 409
+
+    db.delete_unit(name, actor_id=current_user["id"])
+    return jsonify({"deleted": name}), 200

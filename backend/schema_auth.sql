@@ -107,3 +107,17 @@ CREATE TABLE IF NOT EXISTS policy_changes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_policy_changes ON policy_changes(changed_at DESC);
+
+-- Police units a complaint can be routed to.
+--
+-- Units were previously implied: whatever names appeared in routing_rules.unit
+-- or users.unit were the units that existed. That made it impossible to create
+-- a unit before assigning work to it, and impossible to rename one without
+-- editing both tables by hand. This registry holds them explicitly; db.list_units
+-- still unions it with the names already in use, so databases seeded before this
+-- table existed keep working.
+CREATE TABLE IF NOT EXISTS units (
+    name        TEXT PRIMARY KEY,
+    description TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);

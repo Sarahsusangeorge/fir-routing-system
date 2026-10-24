@@ -259,6 +259,10 @@ start-up; `NIVARA_DB_PATH` lets tests use isolated copies.
 | GET, PATCH | `/api/admin/sections[/<code>]` | admin | severity weights and the cognizable/bailable attributes behind them |
 | GET, POST | `/api/admin/routing-rules` | admin | which unit handles which section, and in what precedence |
 | PATCH, DELETE | `/api/admin/routing-rules/<id>` | admin | change or remove a routing rule |
+| GET, POST | `/api/admin/stations` | admin | police stations, with what depends on each |
+| PATCH, DELETE | `/api/admin/stations/<code>` | admin | rename a station, or remove an unused one |
+| GET, POST | `/api/admin/units` | admin | police units, registered and in use |
+| PATCH, DELETE | `/api/admin/units/<name>` | admin | rename a unit (carrying its rules and officers), or remove an unused one |
 | GET | `/api/admin/policy-changes` | admin | append-only record of who changed which policy value, and when |
 
 All `/api` responses carry `no-store`; requests are limited to 256 KiB;
@@ -296,10 +300,8 @@ is configured in `.devcontainer/`. Dependencies are pinned, with
   policy, consent records) are not implemented.
 - **Infrastructure.** No HTTPS deployment, WSGI server, backups or
   monitoring; SQLite suits a single-node pilot only.
-- **Missing features.** Notifications, attachments, admin screens for units
-  and stations, multilingual support, CCTNS integration, a legally valid
-  e-signature. Routing rules and severity weights are now editable (Section
-  13); units and stations are still seed data.
+- **Missing features.** Notifications, attachments, multilingual support,
+  CCTNS integration, a legally valid e-signature.
 - **Not tested:** Firefox, Safari, Edge, screen readers, OWASP ZAP, Playwright
   end-to-end runs.
 - **Allocation evidence is a simulation** on a synthetic workload.
@@ -325,6 +327,15 @@ these endpoints and the administrator's Policy screen are for.
   reasons for both are stored when it is analysed and are never rewritten by
   a later policy change. Two complaints with identical text can therefore
   differ, and the record of each says why.
+- **Stations and units.** Both are reference data allocation reads directly,
+  and neither is protected by a foreign key: `users.station`,
+  `complaints.station` and `users.unit` hold names as text. Removing either is
+  refused while anything still names it, and the refusal reports the counts.
+  A station's code is immutable for the same reason. Renaming a unit updates
+  the registry, the routing rules and the officers in one transaction, since
+  moving only the registry would leave rules routing to a unit that no longer
+  exists. Units that predate the registry are listed as in use but
+  unregistered, and must be registered before they can be renamed.
 - **Every change is attributable.** `policy_changes` is append-only and
   records the administrator, the field, the old value, the new value and the
   time. A change that alters nothing is not recorded. This is the same

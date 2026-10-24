@@ -7,6 +7,8 @@ import {
   type Complaint,
   type ComplaintEvent,
   type ComplaintStatus,
+  type AdminStation,
+  type AdminUnit,
   type IpcSection,
   type NewStaffAccount,
   type PolicyChange,
@@ -767,4 +769,205 @@ export async function fetchPolicyChanges(): Promise<PolicyChange[]> {
   }
   await wait(120);
   return demoPolicyLog;
+}
+
+// ---------------------------------------------------------------------------
+// Stations and units (administrators)
+// ---------------------------------------------------------------------------
+//
+// Allocation keeps a case at the station it was filed at and decides
+// eligibility by unit, so both are part of how the system decides. Neither is
+// protected by a foreign key, which is why every response carries the counts
+// of what still depends on the row: the server refuses to remove one that is
+// in use, and the screen says so before the administrator tries.
+
+let demoAdminStations: AdminStation[] = [
+  { code: "PS-CENTRAL", name: "Central Police Station", district: "Vellore", officers: 3, complaints: 6 },
+  { code: "PS-NORTH", name: "North Police Station", district: "Vellore", officers: 2, complaints: 4 },
+  { code: "PS-SOUTH", name: "South Police Station", district: "Vellore", officers: 2, complaints: 3 },
+  { code: "PS-EAST", name: "East Police Station", district: "Vellore", officers: 0, complaints: 0 },
+];
+
+let demoAdminUnits: AdminUnit[] = [
+  { name: "Local Police Station", description: null, registered: false, is_default: true, officers: 4, rules: 1 },
+  { name: "Crime Branch", description: null, registered: false, is_default: false, officers: 1, rules: 1 },
+  { name: "Economic Offences Wing", description: null, registered: false, is_default: false, officers: 1, rules: 1 },
+  { name: "Women & Child Protection Unit", description: null, registered: false, is_default: false, officers: 1, rules: 1 },
+  { name: "Cyber Cell", description: null, registered: false, is_default: false, officers: 0, rules: 0 },
+];
+
+export async function fetchAdminStations(): Promise<AdminStation[]> {
+  if (!isDemoMode()) {
+    return (await apiFetch<{ stations: AdminStation[] }>("/api/admin/stations")).stations;
+  }
+  await wait(150);
+  return [...demoAdminStations];
+}
+
+export async function createStation(station: {
+  code: string;
+  name: string;
+  district?: string | null;
+}): Promise<AdminStation> {
+  if (!isDemoMode()) {
+    return (
+      await apiFetch<{ station: AdminStation }>("/api/admin/stations", {
+        method: "POST",
+        body: JSON.stringify(station),
+      })
+    ).station;
+  }
+  await wait(150);
+  const code = station.code.trim().toUpperCase();
+  if (demoAdminStations.some((s) => s.code === code)) {
+    throw new ApiRequestError("A station with that code already exists.", 409);
+  }
+  const created: AdminStation = {
+    code,
+    name: station.name,
+    district: station.district ?? null,
+    officers: 0,
+    complaints: 0,
+  };
+  demoAdminStations = [...demoAdminStations, created];
+  demoLog("station", code, "created", null, station.name);
+  return created;
+}
+
+export async function updateStation(
+  code: string,
+  changes: { name?: string; district?: string | null }
+): Promise<AdminStation> {
+  if (!isDemoMode()) {
+    return (
+      await apiFetch<{ station: AdminStation }>(`/api/admin/stations/${encodeURIComponent(code)}`, {
+        method: "PATCH",
+        body: JSON.stringify(changes),
+      })
+    ).station;
+  }
+  await wait(150);
+  const before = demoAdminStations.find((s) => s.code === code);
+  if (!before) throw new ApiRequestError("Station not found.", 404);
+  for (const [field, value] of Object.entries(changes)) {
+    if (value !== undefined && value !== before[field as keyof AdminStation]) {
+      demoLog("station", code, field, before[field as keyof AdminStation], value);
+    }
+  }
+  const updated = { ...before, ...changes };
+  demoAdminStations = demoAdminStations.map((s) => (s.code === code ? updated : s));
+  return updated;
+}
+
+export async function deleteStation(code: string): Promise<void> {
+  if (!isDemoMode()) {
+    await apiFetch<{ deleted: string }>(`/api/admin/stations/${encodeURIComponent(code)}`, {
+      method: "DELETE",
+    });
+    return;
+  }
+  await wait(150);
+  const before = demoAdminStations.find((s) => s.code === code);
+  if (!before) throw new ApiRequestError("Station not found.", 404);
+  if (before.officers || before.complaints) {
+    throw new ApiRequestError(
+      `${before.name} is still in use by ${before.officers} officer(s) and ${before.complaints} complaint(s). Move them first.`,
+      409
+    );
+  }
+  demoAdminStations = demoAdminStations.filter((s) => s.code !== code);
+  demoLog("station", code, "deleted", before.name, null);
+}
+
+export async function fetchAdminUnits(): Promise<AdminUnit[]> {
+  if (!isDemoMode()) {
+    return (await apiFetch<{ units: AdminUnit[] }>("/api/admin/units")).units;
+  }
+  await wait(150);
+  return [...demoAdminUnits].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function createUnit(unit: { name: string; description?: string | null }): Promise<AdminUnit> {
+  if (!isDemoMode()) {
+    return (
+      await apiFetch<{ unit: AdminUnit }>("/api/admin/units", {
+        method: "POST",
+        body: JSON.stringify(unit),
+      })
+    ).unit;
+  }
+  await wait(150);
+  if (demoAdminUnits.some((u) => u.name === unit.name && u.registered)) {
+    throw new ApiRequestError("That unit already exists.", 409);
+  }
+  const created: AdminUnit = {
+    name: unit.name,
+    description: unit.description ?? null,
+    registered: true,
+    is_default: false,
+    officers: 0,
+    rules: 0,
+  };
+  demoAdminUnits = [...demoAdminUnits.filter((u) => u.name !== unit.name), created];
+  demoLog("unit", unit.name, "created", null, unit.name);
+  return created;
+}
+
+export interface UnitChangeResult {
+  unit: AdminUnit;
+  officers_moved: number;
+  rules_moved: number;
+}
+
+export async function updateUnit(
+  name: string,
+  changes: { name?: string; description?: string | null }
+): Promise<UnitChangeResult> {
+  if (!isDemoMode()) {
+    return apiFetch<UnitChangeResult>(`/api/admin/units/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    });
+  }
+  await wait(150);
+  const before = demoAdminUnits.find((u) => u.name === name);
+  if (!before) throw new ApiRequestError("Unit not found.", 404);
+  const renamed = changes.name !== undefined && changes.name !== name;
+  if (renamed && demoAdminUnits.some((u) => u.name === changes.name)) {
+    throw new ApiRequestError("Another unit already has that name.", 409);
+  }
+  const updated: AdminUnit = { ...before, ...changes, name: changes.name ?? name };
+  demoAdminUnits = demoAdminUnits.map((u) => (u.name === name ? updated : u));
+  if (renamed) demoLog("unit", updated.name, "renamed", name, updated.name);
+  return {
+    unit: updated,
+    officers_moved: renamed ? before.officers : 0,
+    rules_moved: renamed ? before.rules : 0,
+  };
+}
+
+export async function deleteUnit(name: string): Promise<void> {
+  if (!isDemoMode()) {
+    await apiFetch<{ deleted: string }>(`/api/admin/units/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    return;
+  }
+  await wait(150);
+  const before = demoAdminUnits.find((u) => u.name === name);
+  if (!before) throw new ApiRequestError("Unit not found.", 404);
+  if (before.is_default) {
+    throw new ApiRequestError(
+      `${name} is the fallback every unmatched complaint routes to and cannot be removed.`,
+      400
+    );
+  }
+  if (before.officers || before.rules) {
+    throw new ApiRequestError(
+      `${name} is still used by ${before.officers} officer(s) and ${before.rules} routing rule(s). Reassign them first.`,
+      409
+    );
+  }
+  demoAdminUnits = demoAdminUnits.filter((u) => u.name !== name);
+  demoLog("unit", name, "deleted", name, null);
 }

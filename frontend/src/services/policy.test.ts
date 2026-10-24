@@ -180,3 +180,64 @@ describe("OCR assets are served from this origin", () => {
     }
   });
 });
+
+describe("stations and units administration", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("lists stations with what still depends on them", async () => {
+    const fetchMock = jsonOnce({
+      stations: [{ code: "PS-NORTH", name: "North", district: "Vellore", officers: 2, complaints: 4 }],
+    });
+    const api = await liveApi();
+    const stations = await api.fetchAdminStations();
+
+    expect(callOf(fetchMock).url).toContain("/api/admin/stations");
+    expect(stations[0].officers).toBe(2);
+    expect(stations[0].complaints).toBe(4);
+  });
+
+  it("refuses to hide a server rejection when a station is still in use", async () => {
+    jsonOnce(
+      { error: "North is still in use by 2 officer(s) and 4 complaint(s). Move them first." },
+      409
+    );
+    const api = await liveApi();
+    await expect(api.deleteStation("PS-NORTH")).rejects.toThrow(/still in use/);
+  });
+
+  it("creates a station with its code, name and district", async () => {
+    const fetchMock = jsonOnce({ station: { code: "PS-WEST", name: "West", district: "Vellore" } }, 201);
+    const api = await liveApi();
+    await api.createStation({ code: "PS-WEST", name: "West", district: "Vellore" });
+
+    const call = callOf(fetchMock);
+    expect(call.init?.method).toBe("POST");
+    expect(call.body).toEqual({ code: "PS-WEST", name: "West", district: "Vellore" });
+  });
+
+  it("reports how much a unit rename carried with it", async () => {
+    const fetchMock = jsonOnce({
+      unit: { name: "Anti-Narcotics Cell", description: null, registered: true, is_default: false, officers: 1, rules: 1 },
+      officers_moved: 1,
+      rules_moved: 1,
+    });
+    const api = await liveApi();
+    const result = await api.updateUnit("Narcotics Cell", { name: "Anti-Narcotics Cell" });
+
+    expect(callOf(fetchMock).url).toContain("/api/admin/units/Narcotics%20Cell");
+    expect(result.officers_moved).toBe(1);
+    expect(result.rules_moved).toBe(1);
+  });
+
+  it("passes through the refusal to delete the fallback unit", async () => {
+    jsonOnce(
+      { error: "Local Police Station is the fallback every unmatched complaint routes to and cannot be removed." },
+      400
+    );
+    const api = await liveApi();
+    await expect(api.deleteUnit("Local Police Station")).rejects.toThrow(/fallback/);
+  });
+});
