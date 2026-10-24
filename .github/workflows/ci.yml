@@ -1,0 +1,100 @@
+# Runs the checks the October 2026 audit established, on every push and pull
+# request, so they stop depending on someone remembering to run them.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run the test suite
+        # Tests build their own temporary databases; the committed schema and
+        # seed files are the only inputs, so nothing here touches real data.
+        run: python -m pytest -q
+
+      - name: No high-severity security findings
+        # The October 2026 audit left the backend at zero high-severity Bandit
+        # findings and accepted the medium ones it lists. This step holds that
+        # line: a new high-severity finding fails the build. The full report,
+        # including the accepted findings, is in the audit job below.
+        run: bandit -q -r . -x ./tests --severity-level high
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm run test
+      - name: Build
+        # Also proves the OCR assets still vendor out of node_modules, which
+        # is what keeps them off a CDN at runtime.
+        run: npm run build
+
+  audit:
+    name: Static analysis and dependency audit
+    runs-on: ubuntu-latest
+    # Advisory: a newly published advisory should not turn the build red for
+    # work that did not cause it. The job still reports what it found.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Python tooling
+        run: pip install -r backend/requirements-dev.txt
+      - name: Ruff
+        run: ruff check backend --output-format=concise
+      - name: Bandit
+        run: bandit -q -r backend -x backend/tests
+      - name: pip-audit
+        run: pip-audit -r backend/requirements.txt
+      - name: npm audit
+        working-directory: frontend
+        run: npm audit --audit-level=high

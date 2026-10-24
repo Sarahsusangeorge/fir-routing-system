@@ -953,3 +953,168 @@ def station_exists(code):
     row = conn.execute("SELECT 1 FROM stations WHERE code = ?", (code,)).fetchone()
     conn.close()
     return row is not None
+
+
+# ---------------------------------------------------------------------------
+# Decision policy: severity weights and routing rules (FR9)
+# ---------------------------------------------------------------------------
+#
+# These two tables are what make priority and routing configurable without
+# retraining. Because they decide how every later complaint is treated, each
+# change is written to policy_changes with the administrator who made it.
+# Changes apply to complaints analysed afterwards; stored results are left
+# as they were recorded.
+
+def _log_policy(conn, actor_id, entity, record_key, field, old_value, new_value):
+    conn.execute(
+        "INSERT INTO policy_changes (actor_id, entity, record_key, field, old_value, new_value) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (actor_id, entity, str(record_key), field,
+         None if old_value is None else str(old_value),
+         None if new_value is None else str(new_value)),
+    )
+
+
+def list_sections():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM ipc_sections ORDER BY severity_weight DESC, code").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_section(code):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM ipc_sections WHERE code = ?", (code,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_section(code, fields, actor_id):
+    """Update an IPC section's severity attributes. Returns the updated row."""
+    allowed = {"severity_weight", "cognizable", "bailable", "max_punishment_years"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if not fields:
+        return get_section(code)
+    conn = get_connection()
+    try:
+        before = conn.execute("SELECT * FROM ipc_sections WHERE code = ?", (code,)).fetchone()
+        if before is None:
+            return None
+        assignments = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(f"UPDATE ipc_sections SET {assignments} WHERE code = ?",
+                     list(fields.values()) + [code])
+        for key, value in fields.items():
+            if before[key] != value:
+                _log_policy(conn, actor_id, "ipc_section", code, key, before[key], value)
+        conn.commit()
+    finally:
+        conn.close()
+    return get_section(code)
+
+
+def list_all_routing_rules():
+    """Every routing rule, with its section title, in the order routing reads them."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT r.id, r.section_code, r.unit, r.precedence, s.title AS section_title "
+        "FROM routing_rules r LEFT JOIN ipc_sections s ON s.code = r.section_code "
+        "ORDER BY r.precedence ASC, r.section_code"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_routing_rule(rule_id):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM routing_rules WHERE id = ?", (rule_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def routing_rule_exists(section_code, unit, exclude_id=None):
+    conn = get_connection()
+    sql = "SELECT 1 FROM routing_rules WHERE section_code = ? AND unit = ?"
+    params = [section_code, unit]
+    if exclude_id is not None:
+        sql += " AND id != ?"
+        params.append(exclude_id)
+    row = conn.execute(sql, params).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_routing_rule(section_code, unit, precedence, actor_id):
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO routing_rules (section_code, unit, precedence) VALUES (?, ?, ?)",
+            (section_code, unit, precedence),
+        )
+        rule_id = cur.lastrowid
+        _log_policy(conn, actor_id, "routing_rule", rule_id, "created", None,
+                    f"{section_code} -> {unit} @ {precedence}")
+        conn.commit()
+    finally:
+        conn.close()
+    return get_routing_rule(rule_id)
+
+
+def update_routing_rule(rule_id, fields, actor_id):
+    allowed = {"unit", "precedence"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if not fields:
+        return get_routing_rule(rule_id)
+    conn = get_connection()
+    try:
+        before = conn.execute("SELECT * FROM routing_rules WHERE id = ?", (rule_id,)).fetchone()
+        if before is None:
+            return None
+        assignments = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(f"UPDATE routing_rules SET {assignments} WHERE id = ?",
+                     list(fields.values()) + [rule_id])
+        for key, value in fields.items():
+            if before[key] != value:
+                _log_policy(conn, actor_id, "routing_rule", rule_id, key, before[key], value)
+        conn.commit()
+    finally:
+        conn.close()
+    return get_routing_rule(rule_id)
+
+
+def delete_routing_rule(rule_id, actor_id):
+    conn = get_connection()
+    try:
+        before = conn.execute("SELECT * FROM routing_rules WHERE id = ?", (rule_id,)).fetchone()
+        if before is None:
+            return False
+        conn.execute("DELETE FROM routing_rules WHERE id = ?", (rule_id,))
+        _log_policy(conn, actor_id, "routing_rule", rule_id, "deleted",
+                    f"{before['section_code']} -> {before['unit']} @ {before['precedence']}", None)
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
+def count_officers_for_unit(unit):
+    """Active officers who would be eligible for cases routed to this unit."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM users "
+        "WHERE role = 'officer' AND active = 1 AND availability != 'on_leave' AND unit = ?",
+        (unit,),
+    ).fetchone()
+    conn.close()
+    return row["n"]
+
+
+def list_policy_changes(limit=100):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT p.*, u.name AS actor_name FROM policy_changes p "
+        "LEFT JOIN users u ON u.id = p.actor_id "
+        "ORDER BY p.id DESC LIMIT ?",
+        (int(limit),),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

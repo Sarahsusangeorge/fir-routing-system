@@ -9,6 +9,7 @@ import CasesPage from "./pages/CasesPage";
 import FileComplaintPage from "./pages/FileComplaintPage";
 import LoginPage from "./pages/LoginPage";
 import MyComplaintsPage from "./pages/MyComplaintsPage";
+import PolicyPage from "./pages/PolicyPage";
 import StaffPage from "./pages/StaffPage";
 
 export default function App() {
@@ -51,6 +52,14 @@ export default function App() {
                 element={
                   <RequireRole roles={["admin"]}>
                     <StaffPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/policy"
+                element={
+                  <RequireRole roles={["admin"]}>
+                    <PolicyPage />
                   </RequireRole>
                 }
               />

@@ -186,3 +186,167 @@ def repoint_phone(user_id):
         return jsonify({"error": "That number is already registered to another account."}), 409
     return jsonify({"user": db.get_user(user_id), "previous_phone": old,
                     "history": db.list_phone_history(user_id)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Decision policy: severity weights and routing rules (FR9)
+# ---------------------------------------------------------------------------
+#
+# Priority and routing are driven by two reference tables rather than by model
+# weights, so a jurisdiction can change policy without retraining. These
+# endpoints are what make that claim true in the running system. Every change
+# is recorded in policy_changes with the administrator who made it, and takes
+# effect for complaints analysed afterwards; results already stored against a
+# complaint are left exactly as they were recorded.
+
+MIN_SEVERITY, MAX_SEVERITY = 1.0, 10.0
+MAX_PRECEDENCE = 999
+
+
+def _number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+@bp.route("/sections", methods=["GET"])
+@role_required("admin")
+def list_sections():
+    return jsonify({"sections": db.list_sections()}), 200
+
+
+@bp.route("/sections/<code>", methods=["PATCH"])
+@role_required("admin")
+def update_section(code):
+    section = db.get_section(code)
+    if section is None:
+        return jsonify({"error": "Unknown IPC section."}), 404
+
+    payload = json_object()
+    changes = {}
+
+    if "severity_weight" in payload:
+        weight = _number(payload["severity_weight"])
+        if weight is None or not MIN_SEVERITY <= weight <= MAX_SEVERITY:
+            return jsonify({"error": f"Severity weight must be a number between "
+                                     f"{MIN_SEVERITY:g} and {MAX_SEVERITY:g}."}), 400
+        changes["severity_weight"] = weight
+
+    for flag in ("cognizable", "bailable"):
+        if flag in payload:
+            if not isinstance(payload[flag], bool):
+                return jsonify({"error": f"{flag} must be true or false."}), 400
+            changes[flag] = 1 if payload[flag] else 0
+
+    if "max_punishment_years" in payload:
+        years = payload["max_punishment_years"]
+        if years is None:
+            changes["max_punishment_years"] = None          # life imprisonment or death
+        else:
+            years = _number(years)
+            if years is None or not 0 < years <= 100:
+                return jsonify({"error": "Maximum punishment must be a number of years above 0, "
+                                         "or null for life imprisonment or death."}), 400
+            changes["max_punishment_years"] = years
+
+    if not changes:
+        return jsonify({"error": "Nothing to update."}), 400
+
+    updated = db.update_section(code, changes, actor_id=current_user["id"])
+    return jsonify({"section": updated,
+                    "note": "Applies to complaints analysed from now on; "
+                            "results already recorded are unchanged."}), 200
+
+
+@bp.route("/routing-rules", methods=["GET"])
+@role_required("admin")
+def list_routing_rules():
+    rules = db.list_all_routing_rules()
+    units = sorted({r["unit"] for r in rules} | {routing_engine.DEFAULT_UNIT})
+    return jsonify({
+        "rules": rules,
+        "units": units,
+        "default_unit": routing_engine.DEFAULT_UNIT,
+        "officers_by_unit": {u: db.count_officers_for_unit(u) for u in units},
+    }), 200
+
+
+def _rule_fields(payload, require_all):
+    """Validate unit and precedence. Returns (changes, error_response)."""
+    changes = {}
+
+    if "unit" in payload or require_all:
+        unit = text_field(payload, "unit").strip()
+        if not 2 <= len(unit) <= 80:
+            return None, (jsonify({"error": "Enter the unit that should handle this section."}), 400)
+        changes["unit"] = unit
+
+    if "precedence" in payload or require_all:
+        precedence = payload.get("precedence")
+        if isinstance(precedence, bool) or not isinstance(precedence, int) \
+                or not 1 <= precedence <= MAX_PRECEDENCE:
+            return None, (jsonify({"error": f"Precedence must be a whole number between 1 and "
+                                            f"{MAX_PRECEDENCE}; lower wins."}), 400)
+        changes["precedence"] = precedence
+
+    return changes, None
+
+
+@bp.route("/routing-rules", methods=["POST"])
+@role_required("admin")
+def create_routing_rule():
+    payload = json_object()
+    code = text_field(payload, "section_code").strip()
+    if db.get_section(code) is None:
+        return jsonify({"error": "Unknown IPC section."}), 404
+
+    changes, error = _rule_fields(payload, require_all=True)
+    if error:
+        return error
+    if db.routing_rule_exists(code, changes["unit"]):
+        return jsonify({"error": "That section already routes to that unit."}), 409
+
+    rule = db.create_routing_rule(code, changes["unit"], changes["precedence"],
+                                  actor_id=current_user["id"])
+    return jsonify({"rule": rule,
+                    "officers_available": db.count_officers_for_unit(changes["unit"])}), 201
+
+
+@bp.route("/routing-rules/<int:rule_id>", methods=["PATCH"])
+@role_required("admin")
+def update_routing_rule(rule_id):
+    rule = db.get_routing_rule(rule_id)
+    if rule is None:
+        return jsonify({"error": "Routing rule not found."}), 404
+
+    payload = json_object()
+    changes, error = _rule_fields(payload, require_all=False)
+    if error:
+        return error
+    if not changes:
+        return jsonify({"error": "Nothing to update."}), 400
+    if "unit" in changes and db.routing_rule_exists(rule["section_code"], changes["unit"],
+                                                    exclude_id=rule_id):
+        return jsonify({"error": "That section already routes to that unit."}), 409
+
+    updated = db.update_routing_rule(rule_id, changes, actor_id=current_user["id"])
+    return jsonify({"rule": updated,
+                    "officers_available": db.count_officers_for_unit(updated["unit"])}), 200
+
+
+@bp.route("/routing-rules/<int:rule_id>", methods=["DELETE"])
+@role_required("admin")
+def delete_routing_rule(rule_id):
+    rule = db.get_routing_rule(rule_id)
+    if rule is None:
+        return jsonify({"error": "Routing rule not found."}), 404
+    db.delete_routing_rule(rule_id, actor_id=current_user["id"])
+    return jsonify({"deleted": rule_id,
+                    "note": f"Complaints citing Section {rule['section_code']} will no longer "
+                            f"route to {rule['unit']} on that rule."}), 200
+
+
+@bp.route("/policy-changes", methods=["GET"])
+@role_required("admin")
+def policy_changes():
+    return jsonify({"changes": db.list_policy_changes(limit=200)}), 200

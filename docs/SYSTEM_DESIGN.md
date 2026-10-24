@@ -254,8 +254,12 @@ start-up; `NIVARA_DB_PATH` lets tests use isolated copies.
 | GET | `/api/officers` | staff | availability, open cases, capacity, load |
 | PATCH | `/api/me/availability` | officer | available / busy / on leave |
 | GET | `/api/stats`, `/api/units`, `/api/stations`, `/api/sections` | staff | counts and reference data |
-| GET, POST, PATCH | `/api/admin/users[/<id>]` | admin | staff accounts |
+| GET, POST, PATCH | `/api/admin/users[/<id>]` | admin | staff accounts, incl. username, station, capacity, availability and password reset |
 | PUT | `/api/admin/users/<id>/phone` | admin | lost-SIM recovery |
+| GET, PATCH | `/api/admin/sections[/<code>]` | admin | severity weights and the cognizable/bailable attributes behind them |
+| GET, POST | `/api/admin/routing-rules` | admin | which unit handles which section, and in what precedence |
+| PATCH, DELETE | `/api/admin/routing-rules/<id>` | admin | change or remove a routing rule |
+| GET | `/api/admin/policy-changes` | admin | append-only record of who changed which policy value, and when |
 
 All `/api` responses carry `no-store`; requests are limited to 256 KiB;
 errors are JSON with no internals. Security headers: nosniff, frame denial,
@@ -292,12 +296,37 @@ is configured in `.devcontainer/`. Dependencies are pinned, with
   policy, consent records) are not implemented.
 - **Infrastructure.** No HTTPS deployment, WSGI server, backups or
   monitoring; SQLite suits a single-node pilot only.
-- **Missing features.** Notifications, attachments, admin screens for routing
-  rules, units, stations and the audit log (FR9 in the report), multilingual
-  support, CCTNS integration, a legally valid e-signature.
-- **CI is not actually running.** The audit changelog lists
-  `.github/workflows/ci.yml` and `pages.yml`, but no `.github/` directory was
-  ever committed; the tests run only locally.
+- **Missing features.** Notifications, attachments, admin screens for units
+  and stations, multilingual support, CCTNS integration, a legally valid
+  e-signature. Routing rules and severity weights are now editable (Section
+  13); units and stations are still seed data.
 - **Not tested:** Firefox, Safari, Edge, screen readers, OWASP ZAP, Playwright
   end-to-end runs.
 - **Allocation evidence is a simulation** on a synthetic workload.
+
+## 13. Editable decision policy (FR9)
+
+Priority and routing read two database tables rather than model weights, so a
+jurisdiction can change policy without retraining anything. That is only true
+of the running system if the tables can actually be edited, which is what
+these endpoints and the administrator's Policy screen are for.
+
+- **Severity weights.** `ipc_sections.severity_weight` on a 1-10 rubric
+  (Section 3), with the cognizable and bailable flags and the maximum
+  punishment that justify it. Priority is `max(severity x confidence)`, so a
+  change here moves the priority of every complaint analysed afterwards.
+- **Routing rules.** `routing_rules` maps a section to a unit with a
+  precedence; the lowest precedence wins, which is what makes routing
+  victim-centric. Rules can be added, repointed, reordered or removed. A unit
+  no active officer serves is allowed, because jurisdictions reorganise, but
+  the administrator is told at once that cases routed there will wait
+  unassigned.
+- **Changes apply forward only.** A complaint's priority, routing and the
+  reasons for both are stored when it is analysed and are never rewritten by
+  a later policy change. Two complaints with identical text can therefore
+  differ, and the record of each says why.
+- **Every change is attributable.** `policy_changes` is append-only and
+  records the administrator, the field, the old value, the new value and the
+  time. A change that alters nothing is not recorded. This is the same
+  standard the case event log sets (Section 6): a change to how the system
+  decides is a decision in its own right.

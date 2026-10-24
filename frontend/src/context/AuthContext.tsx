@@ -51,6 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       verifyCode: async (channel, identifier, code, name, contact) =>
         signedIn(await auth.verifySignInCode(channel, identifier, code, name, contact)),
       demoSignIn: (role) => signedIn(auth.demoSignIn(role)),
+      updateUser: setUser,
       signOut: async () => {
         await auth.signOut().catch(() => undefined);
         setSessionExpired(false);

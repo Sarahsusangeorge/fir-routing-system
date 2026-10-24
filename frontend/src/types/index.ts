@@ -163,16 +163,27 @@ export interface User {
   role: Role;
   /** Officers: the unit whose queue they work. Null means every unit. */
   unit: string | null;
+  /** Officers: the station they are posted to, and their caseload limits. */
+  station?: string | null;
+  capacity?: number | null;
+  availability?: OfficerAvailability | null;
 }
 
 export interface StaffAccount extends User {
   role: "officer" | "admin";
   email: string;
-  station?: string | null;
   active: number;
   open_cases: number;
   created_at: string;
   last_login_at: string | null;
+}
+
+export type OfficerAvailability = "available" | "busy" | "on_leave";
+
+export interface Station {
+  code: string;
+  name: string;
+  district?: string | null;
 }
 
 export interface NewStaffAccount {
@@ -181,6 +192,51 @@ export interface NewStaffAccount {
   role: "officer" | "admin";
   password: string;
   unit?: string | null;
+  /** Officers sign in with this rather than their email, if one is set. */
+  username?: string | null;
+  station?: string | null;
+  capacity?: number | null;
+}
+
+/**
+ * The two tables that decide priority and routing. They are data, not model
+ * weights, so an administrator can change policy without retraining -- which
+ * is what the screens in PolicyPage exist to do.
+ */
+export interface IpcSection {
+  code: string;
+  title: string;
+  cognizable: number;
+  bailable: number;
+  max_punishment_years: number | null;
+  severity_weight: number;
+}
+
+export interface RoutingRule {
+  id: number;
+  section_code: string;
+  unit: string;
+  precedence: number;
+  section_title?: string | null;
+}
+
+export interface RoutingPolicy {
+  rules: RoutingRule[];
+  units: string[];
+  default_unit: string;
+  officers_by_unit: Record<string, number>;
+}
+
+export interface PolicyChange {
+  id: number;
+  actor_id: number | null;
+  actor_name: string | null;
+  entity: "ipc_section" | "routing_rule";
+  record_key: string;
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  changed_at: string;
 }
 
 export interface ClassifyRequest {

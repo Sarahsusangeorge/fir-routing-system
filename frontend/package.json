@@ -4,13 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev": "npm run vendor:ocr && vite",
+    "build": "npm run vendor:ocr && tsc -b && vite build",
+    "vendor:ocr": "node scripts/vendor-ocr.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@tesseract.js-data/eng": "^1.0.0",
     "framer-motion": "^13.2.0",
     "lucide-react": "^1.42.0",
     "react": "^19.2.8",

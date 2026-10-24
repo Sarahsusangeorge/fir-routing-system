@@ -1,0 +1,58 @@
+# Publishes the browser-only demo to GitHub Pages. The demo runs with
+# synthetic data and a role picker: no backend, no real accounts and nothing
+# saved, which is why it is safe to serve publicly.
+#
+# Requires Settings -> Pages -> Source = GitHub Actions. Until that is set the
+# deploy step fails, so this runs on demand rather than on every push.
+name: Pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build the demo
+        working-directory: frontend
+        # No VITE_API_BASE_URL, so the app starts in demo mode.
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+        run: npm run build
+      - name: Serve the same file for every route
+        # The app uses hash routing, but a copy of index.html as 404.html keeps
+        # a deep link working if anyone edits that later.
+        working-directory: frontend
+        run: cp dist/index.html dist/404.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -26,3 +26,6 @@ dist-ssr
 # Claude Code local config
 .claude/
 .env
+
+# Tesseract OCR assets copied out of node_modules by scripts/vendor-ocr.mjs
+public/tesseract/
