@@ -89,12 +89,18 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install Python tooling
         run: pip install -r backend/requirements-dev.txt
+      # Each report runs even when an earlier one found something, so one noisy
+      # tool cannot hide the other three.
       - name: Ruff
+        if: always()
         run: ruff check backend --output-format=concise
       - name: Bandit
+        if: always()
         run: bandit -q -r backend -x backend/tests
       - name: pip-audit
+        if: always()
         run: pip-audit -r backend/requirements.txt
       - name: npm audit
+        if: always()
         working-directory: frontend
         run: npm audit --audit-level=high
