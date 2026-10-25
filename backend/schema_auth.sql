@@ -90,3 +90,34 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
     jti        TEXT PRIMARY KEY,
     expires_at TEXT NOT NULL
 );
+
+-- Append-only record of changes to the decision policy tables: severity
+-- weights and routing rules. Those tables drive priority and routing for
+-- every later complaint, so a change to them is a change to how the system
+-- decides, and it has to be attributable in the same way a case action is.
+CREATE TABLE IF NOT EXISTS policy_changes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id   INTEGER REFERENCES users(id),
+    entity     TEXT NOT NULL,              -- 'ipc_section' or 'routing_rule'
+    record_key TEXT NOT NULL,              -- section code, or routing rule id
+    field      TEXT NOT NULL,              -- column changed, or 'created'/'deleted'
+    old_value  TEXT,
+    new_value  TEXT,
+    changed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_policy_changes ON policy_changes(changed_at DESC);
+
+-- Police units a complaint can be routed to.
+--
+-- Units were previously implied: whatever names appeared in routing_rules.unit
+-- or users.unit were the units that existed. That made it impossible to create
+-- a unit before assigning work to it, and impossible to rename one without
+-- editing both tables by hand. This registry holds them explicitly; db.list_units
+-- still unions it with the names already in use, so databases seeded before this
+-- table existed keep working.
+CREATE TABLE IF NOT EXISTS units (
+    name        TEXT PRIMARY KEY,
+    description TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);

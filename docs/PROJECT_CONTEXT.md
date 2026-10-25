@@ -1,6 +1,7 @@
 # NIVARA — Project context (read this first)
 
-Last updated: **12 October 2026**, against `main` at `918ebe0`. This is the
+Last updated: **25 October 2026**, against `main` at `d6b0b9c` plus the
+implementation branch described below. This is the
 starting point for any new chat or new team member, whether the work is
 continuing development or drafting the journal paper. It says what the
 project is, where things stand, what has been decided and why, and which
@@ -90,8 +91,8 @@ Production mode refuses to start while demo passwords are active.
 **Tests**
 
 ```bash
-cd backend && pytest                 # 216 passed, 1 xfailed (verified 12 Oct 2026)
-cd frontend && npx vitest run        # 15 passed (verified 12 Oct 2026)
+cd backend && pytest                 # 257 passed, 1 xfailed (verified 25 Oct 2026)
+cd frontend && npx vitest run        # 32 passed (verified 25 Oct 2026)
 python experiments/allocation_sim.py --runs 30
 ```
 
@@ -131,18 +132,32 @@ limitation of the keyword baseline.
   secret handling, no code printing in production.
 - Accessibility: WAI-ARIA tabs, focus management, truthful copy, 0 axe
   violations on scanned pages.
-- Tests: 216 backend + 15 frontend, with audit evidence.
+- Editable decision policy (FR9): administrators can change severity weights
+  and routing rules from the Policy screen, with an append-only record of who
+  changed what. Changes apply to complaints analysed afterwards and never
+  rewrite a stored result.
+- Staff administration covers username, station, capacity and password reset;
+  officers set their own availability.
+- No third-party requests at runtime: the Tesseract OCR assets and the Inter
+  font are served from the application's own origin.
+- CI runs both suites, the type-check, the lint, the production build and a
+  blocking check for high-severity Bandit findings on every push.
+- Station and unit administration, with reference checks: neither can be
+  removed while officers, complaints or routing rules still name it, and
+  renaming a unit carries its rules and officers with it.
+- Tests: 257 backend + 32 frontend, with audit evidence.
 
 **Open work — development**
 
 - **Model weights are missing** (Track A); the keyword baseline is what runs.
-- Frontend gaps (Track C): the Staff page still has no username, station or
-  capacity fields and no password reset; officers have no control to set
-  availability (`PATCH /api/me/availability` is unused); no admin screens for
-  routing rules or severity weights (FR9 in the report).
-- No CI: `.github/workflows/` was never committed although the audit
-  changelog lists it, so tests run only locally.
-- Self-host the Tesseract OCR assets instead of loading them from a CDN.
+- Notifications and attachments are unbuilt. Both are larger than the rest of
+  this list: notifications need a delivery channel and citizen preferences,
+  and attachments in a police system are evidence, needing storage, type and
+  size limits, and access rules that follow restricted-case redaction.
+- Pre-existing lint debt: `ruff check backend` reports about 59 findings and
+  Bandit reports 19 medium ones, all inherited and all accepted by the
+  October audit (0 high severity). CI reports them without failing the build;
+  a new high-severity finding does fail it.
 - Optional, from the audit council: make triage urgency-first (escalate
   uncertain-but-grave cases) rather than demoting them.
 
@@ -178,6 +193,9 @@ limitation of the keyword baseline.
 | Digital signing by code + declaration | Satisfies the signing step for a prototype; a statutory e-signature is future work |
 | Decision logic in pure modules | Testable and explainable independently of Flask and SQL |
 | Classifier provenance stored per case | A fallback prediction must never pass as a model prediction |
+| Policy changes apply forward only, never retroactively | A complaint's priority and routing are part of its record; rewriting them would destroy the audit trail and surprise the complainant |
+| A routing rule may name a unit no officer serves | Jurisdictions reorganise, and blocking it would make the table harder to edit than reality allows; the administrator is warned that cases will wait |
+| OCR and font assets served from our own origin | Third-party code executing in a police system, and a third party learning when someone opened it, are both avoidable |
 
 ## How to work on this project
 

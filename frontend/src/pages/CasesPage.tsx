@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import AvailabilityControl from "../components/AvailabilityControl";
 import ErrorState from "../components/ErrorState";
 import HistoryFilters, { type PriorityFilter, type SortKey } from "../components/HistoryFilters";
 import HistoryTable from "../components/HistoryTable";
@@ -158,6 +159,10 @@ export default function CasesPage() {
           {flash}
         </p>
       )}
+
+      <div className="mt-8 max-w-xl">
+        <AvailabilityControl />
+      </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-10">
         <StatCard label="Open cases" value={stats.open} accent="neutral" />

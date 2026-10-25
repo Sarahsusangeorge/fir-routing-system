@@ -7,10 +7,18 @@ import {
   type Complaint,
   type ComplaintEvent,
   type ComplaintStatus,
+  type AdminStation,
+  type AdminUnit,
+  type IpcSection,
   type NewStaffAccount,
+  type PolicyChange,
   type ReviewInfo,
+  type RoutingPolicy,
+  type RoutingRule,
   type ReviewRequest,
   type StaffAccount,
+  type Station,
+  type User,
 } from "../types";
 import { DEMO_USERS, currentDemoRole } from "./auth";
 import { ApiRequestError, apiFetch, AuthError, isDemoMode, NetworkError, setCsrfToken } from "./http";
@@ -269,6 +277,10 @@ export async function createStaff(account: NewStaffAccount): Promise<StaffChange
     name: account.name,
     role: account.role,
     unit: account.role === "officer" ? account.unit ?? null : null,
+    username: account.username ?? null,
+    station: account.role === "officer" ? account.station ?? null : null,
+    capacity: account.role === "officer" ? account.capacity ?? null : null,
+    availability: account.role === "officer" ? "available" : null,
     active: 1,
     open_cases: 0,
     created_at: new Date().toISOString(),
@@ -280,7 +292,14 @@ export async function createStaff(account: NewStaffAccount): Promise<StaffChange
 
 export async function updateStaff(
   id: number,
-  changes: { active?: boolean; unit?: string | null; password?: string }
+  changes: {
+    active?: boolean;
+    unit?: string | null;
+    station?: string | null;
+    capacity?: number;
+    availability?: StaffAccount["availability"];
+    password?: string;
+  }
 ): Promise<StaffChangeResult> {
   if (!isDemoMode()) {
     return apiFetch<StaffChangeResult>(`/api/admin/users/${id}`, {
@@ -297,6 +316,9 @@ export async function updateStaff(
           ...s,
           ...(changes.active !== undefined ? { active: changes.active ? 1 : 0 } : {}),
           ...(changes.unit !== undefined ? { unit: changes.unit } : {}),
+          ...(changes.station !== undefined ? { station: changes.station } : {}),
+          ...(changes.capacity !== undefined ? { capacity: changes.capacity } : {}),
+          ...(changes.availability !== undefined ? { availability: changes.availability } : {}),
         }
       : s
   );
@@ -517,14 +539,22 @@ export async function fetchOfficers(): Promise<OfficerWorkload[]> {
     }));
 }
 
-export async function setAvailability(availability: OfficerWorkload["availability"]) {
+export interface AvailabilityResult {
+  user: User;
+  cases_moved: number;
+}
+
+export async function setAvailability(
+  availability: OfficerWorkload["availability"]
+): Promise<AvailabilityResult> {
   if (!isDemoMode()) {
-    return apiFetch<{ cases_moved: number }>("/api/me/availability", {
+    return apiFetch<AvailabilityResult>("/api/me/availability", {
       method: "PATCH",
       body: JSON.stringify({ availability }),
     });
   }
-  return { cases_moved: 0 };
+  await wait(150);
+  return { user: { ...DEMO_USERS.officer, availability }, cases_moved: 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -562,4 +592,382 @@ export async function signComplaint(id: number, code: string): Promise<CitizenCo
       body: JSON.stringify({ code, declaration: true }),
     })
   );
+}
+
+// ---------------------------------------------------------------------------
+// Police stations
+// ---------------------------------------------------------------------------
+
+export async function fetchStations(): Promise<Station[]> {
+  if (!isDemoMode()) {
+    return (await apiFetch<{ stations: Station[] }>("/api/stations")).stations;
+  }
+  await wait(120);
+  return [
+    { code: "PS-CENTRAL", name: "Central Police Station", district: "Vellore" },
+    { code: "PS-NORTH", name: "North Police Station", district: "Vellore" },
+    { code: "PS-SOUTH", name: "South Police Station", district: "Vellore" },
+    { code: "PS-EAST", name: "East Police Station", district: "Vellore" },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Decision policy: severity weights and routing rules (administrators)
+// ---------------------------------------------------------------------------
+//
+// Priority and routing read two database tables rather than model weights, so
+// changing policy is an edit here rather than a retraining job. Every change
+// is recorded server-side against the administrator who made it, and applies
+// to complaints analysed afterwards; stored results are never rewritten.
+
+let demoSections: IpcSection[] = [
+  { code: "302", title: "Murder", cognizable: 1, bailable: 0, max_punishment_years: null, severity_weight: 10 },
+  { code: "376", title: "Rape", cognizable: 1, bailable: 0, max_punishment_years: null, severity_weight: 10 },
+  { code: "420", title: "Cheating", cognizable: 1, bailable: 1, max_punishment_years: 7, severity_weight: 6 },
+  { code: "379", title: "Theft", cognizable: 1, bailable: 0, max_punishment_years: 3, severity_weight: 5 },
+  { code: "323", title: "Voluntarily causing hurt", cognizable: 0, bailable: 1, max_punishment_years: 1, severity_weight: 3 },
+];
+
+let demoRules: RoutingRule[] = [
+  { id: 1, section_code: "376", unit: "Women & Child Protection Unit", precedence: 1, section_title: "Rape" },
+  { id: 2, section_code: "302", unit: "Crime Branch", precedence: 3, section_title: "Murder" },
+  { id: 3, section_code: "420", unit: "Economic Offences Wing", precedence: 5, section_title: "Cheating" },
+  { id: 4, section_code: "379", unit: "Local Police Station", precedence: 7, section_title: "Theft" },
+];
+
+let demoPolicyLog: PolicyChange[] = [];
+
+function demoLog(entity: PolicyChange["entity"], key: string, field: string, from: unknown, to: unknown) {
+  demoPolicyLog = [
+    {
+      id: demoPolicyLog.length + 1,
+      actor_id: DEMO_USERS.admin.id,
+      actor_name: DEMO_USERS.admin.name,
+      entity,
+      record_key: key,
+      field,
+      old_value: from === null || from === undefined ? null : String(from),
+      new_value: to === null || to === undefined ? null : String(to),
+      changed_at: new Date().toISOString(),
+    },
+    ...demoPolicyLog,
+  ];
+}
+
+export async function fetchSections(): Promise<IpcSection[]> {
+  if (!isDemoMode()) {
+    return (await apiFetch<{ sections: IpcSection[] }>("/api/admin/sections")).sections;
+  }
+  await wait(150);
+  return [...demoSections].sort((a, b) => b.severity_weight - a.severity_weight);
+}
+
+export async function updateSection(code: string, changes: Partial<IpcSection>): Promise<IpcSection> {
+  if (!isDemoMode()) {
+    const body = await apiFetch<{ section: IpcSection }>(`/api/admin/sections/${encodeURIComponent(code)}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    });
+    return body.section;
+  }
+  await wait(150);
+  const before = demoSections.find((s) => s.code === code);
+  if (!before) throw new ApiRequestError("Unknown IPC section.", 404);
+  if (changes.severity_weight !== undefined && (changes.severity_weight < 1 || changes.severity_weight > 10)) {
+    throw new ApiRequestError("Severity weight must be a number between 1 and 10.", 400);
+  }
+  if (changes.severity_weight !== undefined && changes.severity_weight !== before.severity_weight) {
+    demoLog("ipc_section", code, "severity_weight", before.severity_weight, changes.severity_weight);
+  }
+  const updated = { ...before, ...changes };
+  demoSections = demoSections.map((s) => (s.code === code ? updated : s));
+  return updated;
+}
+
+export async function fetchRoutingPolicy(): Promise<RoutingPolicy> {
+  if (!isDemoMode()) {
+    return apiFetch<RoutingPolicy>("/api/admin/routing-rules");
+  }
+  await wait(150);
+  const units = [...new Set([...demoRules.map((r) => r.unit), "Local Police Station", "Cyber Cell"])].sort();
+  return {
+    rules: [...demoRules].sort((a, b) => a.precedence - b.precedence),
+    units,
+    default_unit: "Local Police Station",
+    officers_by_unit: Object.fromEntries(units.map((u) => [u, u === "Cyber Cell" ? 0 : 2])),
+  };
+}
+
+export interface RuleChangeResult {
+  rule: RoutingRule;
+  officers_available?: number;
+}
+
+export async function createRoutingRule(rule: {
+  section_code: string;
+  unit: string;
+  precedence: number;
+}): Promise<RuleChangeResult> {
+  if (!isDemoMode()) {
+    return apiFetch<RuleChangeResult>("/api/admin/routing-rules", {
+      method: "POST",
+      body: JSON.stringify(rule),
+    });
+  }
+  await wait(150);
+  if (demoRules.some((r) => r.section_code === rule.section_code && r.unit === rule.unit)) {
+    throw new ApiRequestError("That section already routes to that unit.", 409);
+  }
+  const created: RoutingRule = {
+    id: Math.max(0, ...demoRules.map((r) => r.id)) + 1,
+    ...rule,
+    section_title: demoSections.find((s) => s.code === rule.section_code)?.title ?? null,
+  };
+  demoRules = [...demoRules, created];
+  demoLog("routing_rule", String(created.id), "created", null, `${rule.section_code} -> ${rule.unit}`);
+  return { rule: created, officers_available: rule.unit === "Cyber Cell" ? 0 : 2 };
+}
+
+export async function updateRoutingRule(
+  id: number,
+  changes: { unit?: string; precedence?: number }
+): Promise<RuleChangeResult> {
+  if (!isDemoMode()) {
+    return apiFetch<RuleChangeResult>(`/api/admin/routing-rules/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    });
+  }
+  await wait(150);
+  const before = demoRules.find((r) => r.id === id);
+  if (!before) throw new ApiRequestError("Routing rule not found.", 404);
+  for (const [field, value] of Object.entries(changes)) {
+    if (value !== undefined && value !== before[field as keyof RoutingRule]) {
+      demoLog("routing_rule", String(id), field, before[field as keyof RoutingRule], value);
+    }
+  }
+  const updated = { ...before, ...changes };
+  demoRules = demoRules.map((r) => (r.id === id ? updated : r));
+  return { rule: updated, officers_available: updated.unit === "Cyber Cell" ? 0 : 2 };
+}
+
+export async function deleteRoutingRule(id: number): Promise<void> {
+  if (!isDemoMode()) {
+    await apiFetch<{ deleted: number }>(`/api/admin/routing-rules/${id}`, { method: "DELETE" });
+    return;
+  }
+  await wait(150);
+  const before = demoRules.find((r) => r.id === id);
+  if (!before) throw new ApiRequestError("Routing rule not found.", 404);
+  demoRules = demoRules.filter((r) => r.id !== id);
+  demoLog("routing_rule", String(id), "deleted", `${before.section_code} -> ${before.unit}`, null);
+}
+
+export async function fetchPolicyChanges(): Promise<PolicyChange[]> {
+  if (!isDemoMode()) {
+    return (await apiFetch<{ changes: PolicyChange[] }>("/api/admin/policy-changes")).changes;
+  }
+  await wait(120);
+  return demoPolicyLog;
+}
+
+// ---------------------------------------------------------------------------
+// Stations and units (administrators)
+// ---------------------------------------------------------------------------
+//
+// Allocation keeps a case at the station it was filed at and decides
+// eligibility by unit, so both are part of how the system decides. Neither is
+// protected by a foreign key, which is why every response carries the counts
+// of what still depends on the row: the server refuses to remove one that is
+// in use, and the screen says so before the administrator tries.
+
+let demoAdminStations: AdminStation[] = [
+  { code: "PS-CENTRAL", name: "Central Police Station", district: "Vellore", officers: 3, complaints: 6 },
+  { code: "PS-NORTH", name: "North Police Station", district: "Vellore", officers: 2, complaints: 4 },
+  { code: "PS-SOUTH", name: "South Police Station", district: "Vellore", officers: 2, complaints: 3 },
+  { code: "PS-EAST", name: "East Police Station", district: "Vellore", officers: 0, complaints: 0 },
+];
+
+let demoAdminUnits: AdminUnit[] = [
+  { name: "Local Police Station", description: null, registered: false, is_default: true, officers: 4, rules: 1 },
+  { name: "Crime Branch", description: null, registered: false, is_default: false, officers: 1, rules: 1 },
+  { name: "Economic Offences Wing", description: null, registered: false, is_default: false, officers: 1, rules: 1 },
+  { name: "Women & Child Protection Unit", description: null, registered: false, is_default: false, officers: 1, rules: 1 },
+  { name: "Cyber Cell", description: null, registered: false, is_default: false, officers: 0, rules: 0 },
+];
+
+export async function fetchAdminStations(): Promise<AdminStation[]> {
+  if (!isDemoMode()) {
+    return (await apiFetch<{ stations: AdminStation[] }>("/api/admin/stations")).stations;
+  }
+  await wait(150);
+  return [...demoAdminStations];
+}
+
+export async function createStation(station: {
+  code: string;
+  name: string;
+  district?: string | null;
+}): Promise<AdminStation> {
+  if (!isDemoMode()) {
+    return (
+      await apiFetch<{ station: AdminStation }>("/api/admin/stations", {
+        method: "POST",
+        body: JSON.stringify(station),
+      })
+    ).station;
+  }
+  await wait(150);
+  const code = station.code.trim().toUpperCase();
+  if (demoAdminStations.some((s) => s.code === code)) {
+    throw new ApiRequestError("A station with that code already exists.", 409);
+  }
+  const created: AdminStation = {
+    code,
+    name: station.name,
+    district: station.district ?? null,
+    officers: 0,
+    complaints: 0,
+  };
+  demoAdminStations = [...demoAdminStations, created];
+  demoLog("station", code, "created", null, station.name);
+  return created;
+}
+
+export async function updateStation(
+  code: string,
+  changes: { name?: string; district?: string | null }
+): Promise<AdminStation> {
+  if (!isDemoMode()) {
+    return (
+      await apiFetch<{ station: AdminStation }>(`/api/admin/stations/${encodeURIComponent(code)}`, {
+        method: "PATCH",
+        body: JSON.stringify(changes),
+      })
+    ).station;
+  }
+  await wait(150);
+  const before = demoAdminStations.find((s) => s.code === code);
+  if (!before) throw new ApiRequestError("Station not found.", 404);
+  for (const [field, value] of Object.entries(changes)) {
+    if (value !== undefined && value !== before[field as keyof AdminStation]) {
+      demoLog("station", code, field, before[field as keyof AdminStation], value);
+    }
+  }
+  const updated = { ...before, ...changes };
+  demoAdminStations = demoAdminStations.map((s) => (s.code === code ? updated : s));
+  return updated;
+}
+
+export async function deleteStation(code: string): Promise<void> {
+  if (!isDemoMode()) {
+    await apiFetch<{ deleted: string }>(`/api/admin/stations/${encodeURIComponent(code)}`, {
+      method: "DELETE",
+    });
+    return;
+  }
+  await wait(150);
+  const before = demoAdminStations.find((s) => s.code === code);
+  if (!before) throw new ApiRequestError("Station not found.", 404);
+  if (before.officers || before.complaints) {
+    throw new ApiRequestError(
+      `${before.name} is still in use by ${before.officers} officer(s) and ${before.complaints} complaint(s). Move them first.`,
+      409
+    );
+  }
+  demoAdminStations = demoAdminStations.filter((s) => s.code !== code);
+  demoLog("station", code, "deleted", before.name, null);
+}
+
+export async function fetchAdminUnits(): Promise<AdminUnit[]> {
+  if (!isDemoMode()) {
+    return (await apiFetch<{ units: AdminUnit[] }>("/api/admin/units")).units;
+  }
+  await wait(150);
+  return [...demoAdminUnits].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function createUnit(unit: { name: string; description?: string | null }): Promise<AdminUnit> {
+  if (!isDemoMode()) {
+    return (
+      await apiFetch<{ unit: AdminUnit }>("/api/admin/units", {
+        method: "POST",
+        body: JSON.stringify(unit),
+      })
+    ).unit;
+  }
+  await wait(150);
+  if (demoAdminUnits.some((u) => u.name === unit.name && u.registered)) {
+    throw new ApiRequestError("That unit already exists.", 409);
+  }
+  const created: AdminUnit = {
+    name: unit.name,
+    description: unit.description ?? null,
+    registered: true,
+    is_default: false,
+    officers: 0,
+    rules: 0,
+  };
+  demoAdminUnits = [...demoAdminUnits.filter((u) => u.name !== unit.name), created];
+  demoLog("unit", unit.name, "created", null, unit.name);
+  return created;
+}
+
+export interface UnitChangeResult {
+  unit: AdminUnit;
+  officers_moved: number;
+  rules_moved: number;
+}
+
+export async function updateUnit(
+  name: string,
+  changes: { name?: string; description?: string | null }
+): Promise<UnitChangeResult> {
+  if (!isDemoMode()) {
+    return apiFetch<UnitChangeResult>(`/api/admin/units/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    });
+  }
+  await wait(150);
+  const before = demoAdminUnits.find((u) => u.name === name);
+  if (!before) throw new ApiRequestError("Unit not found.", 404);
+  const renamed = changes.name !== undefined && changes.name !== name;
+  if (renamed && demoAdminUnits.some((u) => u.name === changes.name)) {
+    throw new ApiRequestError("Another unit already has that name.", 409);
+  }
+  const updated: AdminUnit = { ...before, ...changes, name: changes.name ?? name };
+  demoAdminUnits = demoAdminUnits.map((u) => (u.name === name ? updated : u));
+  if (renamed) demoLog("unit", updated.name, "renamed", name, updated.name);
+  return {
+    unit: updated,
+    officers_moved: renamed ? before.officers : 0,
+    rules_moved: renamed ? before.rules : 0,
+  };
+}
+
+export async function deleteUnit(name: string): Promise<void> {
+  if (!isDemoMode()) {
+    await apiFetch<{ deleted: string }>(`/api/admin/units/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    return;
+  }
+  await wait(150);
+  const before = demoAdminUnits.find((u) => u.name === name);
+  if (!before) throw new ApiRequestError("Unit not found.", 404);
+  if (before.is_default) {
+    throw new ApiRequestError(
+      `${name} is the fallback every unmatched complaint routes to and cannot be removed.`,
+      400
+    );
+  }
+  if (before.officers || before.rules) {
+    throw new ApiRequestError(
+      `${name} is still used by ${before.officers} officer(s) and ${before.rules} routing rule(s). Reassign them first.`,
+      409
+    );
+  }
+  demoAdminUnits = demoAdminUnits.filter((u) => u.name !== name);
+  demoLog("unit", name, "deleted", name, null);
 }

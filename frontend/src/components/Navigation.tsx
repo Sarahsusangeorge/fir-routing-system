@@ -18,6 +18,7 @@ const LINKS: Record<Role, { to: string; label: string }[]> = {
     { to: "/cases", label: "All cases" },
     { to: "/new", label: "New complaint" },
     { to: "/staff", label: "Staff" },
+    { to: "/policy", label: "Policy" },
   ],
 };
 

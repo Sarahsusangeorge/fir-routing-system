@@ -17,6 +17,8 @@ export interface AuthState {
     contact?: string
   ) => Promise<User>;
   demoSignIn: (role: Role) => User;
+  /** Replaces the signed-in user after they change something about themselves. */
+  updateUser: (u: User) => void;
   signOut: () => Promise<void>;
 }
 
