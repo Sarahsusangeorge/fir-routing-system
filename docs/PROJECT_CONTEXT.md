@@ -1,7 +1,7 @@
 # NIVARA — Project context (read this first)
 
-Last updated: **25 October 2026**, against `main` at `d6b0b9c` plus the
-implementation branch described below. This is the
+Last updated: **25 October 2026**. Everything described here is merged into
+`main`; there is no outstanding branch. This is the
 starting point for any new chat or new team member, whether the work is
 continuing development or drafting the journal paper. It says what the
 project is, where things stand, what has been decided and why, and which
@@ -150,6 +150,11 @@ limitation of the keyword baseline.
 **Open work — development**
 
 - **Model weights are missing** (Track A); the keyword baseline is what runs.
+- **s.155(4) is not implemented.** A case containing at least one cognizable
+  offence is cognizable in its entirety; the system treats cognizability as a
+  per-section attribute. The maximum operator means this rarely changes a
+  priority level, but an interface reporting cognizability per section would
+  state it incorrectly. Fix it alongside the IPC-to-BNS mapping.
 - Notifications and attachments are unbuilt. Both are larger than the rest of
   this list: notifications need a delivery channel and citizen preferences,
   and attachments in a police system are evidence, needing storage, type and
@@ -196,6 +201,7 @@ limitation of the keyword baseline.
 | Policy changes apply forward only, never retroactively | A complaint's priority and routing are part of its record; rewriting them would destroy the audit trail and surprise the complainant |
 | A routing rule may name a unit no officer serves | Jurisdictions reorganise, and blocking it would make the table harder to edit than reality allows; the administrator is warned that cases will wait |
 | OCR and font assets served from our own origin | Third-party code executing in a police system, and a third party learning when someone opened it, are both avoidable |
+| Cognizable and bailable are jurisdiction-configurable, not constants | s.506 is non-cognizable in the First Schedule but cognizable and non-bailable in Uttar Pradesh by a 1989 notification under s.10 of the Criminal Law Amendment Act 1932, upheld by the Allahabad HC Full Bench and approved by the Supreme Court. A single national table would be wrong somewhere by construction |
 
 ## How to work on this project
 
