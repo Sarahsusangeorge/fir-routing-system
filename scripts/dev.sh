@@ -19,6 +19,13 @@ API_PID=$!
 trap 'kill $API_PID 2>/dev/null' EXIT INT TERM
 
 cd "$ROOT/frontend"
+
+# The Tesseract OCR assets are gitignored build output. `npm run dev` and
+# `npm run build` create them, but this script starts vite directly, so on a
+# fresh clone they would be missing and a document scan would 404 at the
+# moment someone tries it.
+npm run --silent vendor:ocr
+
 echo
 echo "NIVARA is starting. Open the web app on port 5173."
 echo "Demo staff logins are listed in backend/README.md; citizen codes appear below."
