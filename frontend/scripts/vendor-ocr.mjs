@@ -20,9 +20,13 @@
 import { createRequire } from "node:module";
 import { cp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+// fileURLToPath, not url.pathname: on Windows the pathname of a file URL is
+// "/C:/Users/..." and the leading slash makes path.resolve treat it as
+// relative, producing "C:\C:\Users\...".
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const out = path.join(root, "public", "tesseract");
 
 function packageDir(name) {
