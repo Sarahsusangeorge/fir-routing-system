@@ -1,0 +1,13 @@
+# torch is installed separately by setup_lab.sh (it needs the CUDA build that matches the lab driver)
+transformers
+datasets
+accelerate
+sentencepiece
+scikit-learn
+scipy
+pandas
+numpy
+matplotlib
+jupyterlab
+transformers-interpret
+huggingface_hub
